@@ -72,7 +72,7 @@ class UpdateDownloadService : Service() {
         versionName: String,
     ) {
         val updateDirectory = File(cacheDir, "updates").apply { mkdirs() }
-        val partial = File(updateDirectory, "hotspot-file-server.apk.part")
+        val partial = File(updateDirectory, "hotspot-file-server.pending.apk")
         val ready = UpdateInstaller.readyApk(this)
         partial.delete()
         ready.delete()

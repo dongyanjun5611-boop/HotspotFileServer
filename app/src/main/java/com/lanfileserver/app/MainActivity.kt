@@ -39,7 +39,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -49,6 +52,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -70,6 +77,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import com.lanfileserver.app.ui.HotspotFileServerTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,6 +108,8 @@ private fun ServerControlScreen() {
     var remotePolicy by remember {
         mutableStateOf(AppPreferences.remoteNetworkPolicy(context))
     }
+    var remoteDevice by remember { mutableStateOf(AppPreferences.remoteDevice(context)) }
+    var selectedTab by remember { mutableStateOf(AppTab.FILES) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -168,13 +179,28 @@ private fun ServerControlScreen() {
     }
 
     LaunchedEffect(Unit) {
-        if (AppPreferences.remoteEnabled(context) && !RemoteDownloadService.running) {
+        if (AppPreferences.remoteEnabled(context) &&
+            AppPreferences.remoteDevice(context) != null &&
+            !RemoteDownloadService.running
+        ) {
             runCatching {
                 ContextCompat.startForegroundService(
                     context,
                     Intent(context, RemoteDownloadService::class.java)
                         .setAction(RemoteDownloadService.ACTION_START),
                 )
+            }
+        }
+        val updateDue = System.currentTimeMillis() - AppPreferences.lastUpdateCheck(context) >=
+            24L * 60L * 60L * 1_000L
+        if (updateDue) {
+            runCatching {
+                withContext(Dispatchers.IO) { AppUpdateChecker.check() }
+            }.onSuccess { available ->
+                AppPreferences.markUpdateChecked(context)
+                if (available != null) {
+                    AppUpdateChecker.notifyAvailable(context, available)
+                }
             }
         }
     }
@@ -230,8 +256,8 @@ private fun ServerControlScreen() {
             remoteError = true
             return
         }
-        if (BuildConfig.REMOTE_DEVICE_TOKEN.isBlank()) {
-            remoteStatus = "当前安装包未配置远程设备令牌"
+        if (remoteDevice == null) {
+            remoteStatus = "请先使用后台配对码绑定这台设备"
             remoteError = true
             return
         }
@@ -270,7 +296,19 @@ private fun ServerControlScreen() {
                     Column {
                         Text("热点文件站", fontWeight = FontWeight.SemiBold)
                         Text(
-                            if (running) "局域网服务运行中" else "局域网文件共享",
+                            when (selectedTab) {
+                                AppTab.FILES -> folderName ?: "本地共享目录"
+                                AppTab.LAN -> if (running) {
+                                    "局域网服务运行中"
+                                } else {
+                                    "局域网文件共享"
+                                }
+                                AppTab.REMOTE -> if (remoteRunning) {
+                                    remoteDevice?.name ?: "远程下载运行中"
+                                } else {
+                                    "远程下载与应用更新"
+                                }
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -281,96 +319,134 @@ private fun ServerControlScreen() {
                 ),
             )
         },
+        bottomBar = {
+            NavigationBar {
+                AppTab.entries.forEach { tab ->
+                    NavigationBarItem(
+                        selected = selectedTab == tab,
+                        onClick = { selectedTab = tab },
+                        icon = {
+                            Icon(
+                                when (tab) {
+                                    AppTab.FILES -> Icons.Default.Folder
+                                    AppTab.LAN -> Icons.Default.Wifi
+                                    AppTab.REMOTE -> Icons.Default.CloudDownload
+                                },
+                                contentDescription = null,
+                            )
+                        },
+                        label = { Text(tab.label) },
+                    )
+                }
+            }
+        },
     ) { contentPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(contentPadding)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            StatusBand(running = running, error = error)
-            HorizontalDivider()
-            BoxWithConstraints(
+        when (selectedTab) {
+            AppTab.FILES -> LocalFileBrowser(
+                treeUri = treeUri,
+                onChooseFolder = { folderPicker.launch(treeUri?.toUri()) },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 18.dp),
+                    .fillMaxSize()
+                    .padding(contentPadding),
+            )
+
+            AppTab.LAN -> Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(contentPadding)
+                    .verticalScroll(rememberScrollState()),
             ) {
-                val wide = maxWidth >= 760.dp
-                if (wide) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(36.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        ConfigurationPane(
-                            folderName = folderName,
-                            treeUri = treeUri,
-                            portText = portText,
-                            onPortChange = { portText = it.filter(Char::isDigit).take(5) },
-                            pinText = pinText,
-                            onPinChange = { pinText = it.trim().take(12) },
-                            running = running,
-                            onChooseFolder = {
-                                folderPicker.launch(treeUri?.toUri())
-                            },
-                            onGeneratePin = { pinText = AppPreferences.generatePin() },
-                            onStart = ::startServer,
-                            onStop = ::stopServer,
-                            onOpenHotspotSettings = { openHotspotSettings(context) },
-                            modifier = Modifier.weight(1f),
-                        )
-                        AccessPane(
-                            urls = urls,
-                            pin = pinText,
-                            running = running,
-                            onRefresh = ::refreshAddresses,
-                            modifier = Modifier.width(330.dp),
-                        )
-                    }
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                        ConfigurationPane(
-                            folderName = folderName,
-                            treeUri = treeUri,
-                            portText = portText,
-                            onPortChange = { portText = it.filter(Char::isDigit).take(5) },
-                            pinText = pinText,
-                            onPinChange = { pinText = it.trim().take(12) },
-                            running = running,
-                            onChooseFolder = {
-                                folderPicker.launch(treeUri?.toUri())
-                            },
-                            onGeneratePin = { pinText = AppPreferences.generatePin() },
-                            onStart = ::startServer,
-                            onStop = ::stopServer,
-                            onOpenHotspotSettings = { openHotspotSettings(context) },
-                        )
-                        HorizontalDivider()
-                        AccessPane(
-                            urls = urls,
-                            pin = pinText,
-                            running = running,
-                            onRefresh = ::refreshAddresses,
-                        )
+                StatusBand(running = running, error = error)
+                HorizontalDivider()
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 18.dp),
+                ) {
+                    val wide = maxWidth >= 760.dp
+                    if (wide) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(36.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            ConfigurationPane(
+                                folderName = folderName,
+                                treeUri = treeUri,
+                                portText = portText,
+                                onPortChange = { portText = it.filter(Char::isDigit).take(5) },
+                                pinText = pinText,
+                                onPinChange = { pinText = it.trim().take(12) },
+                                running = running,
+                                onChooseFolder = { folderPicker.launch(treeUri?.toUri()) },
+                                onGeneratePin = { pinText = AppPreferences.generatePin() },
+                                onStart = ::startServer,
+                                onStop = ::stopServer,
+                                onOpenHotspotSettings = { openHotspotSettings(context) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            AccessPane(
+                                urls = urls,
+                                pin = pinText,
+                                running = running,
+                                onRefresh = ::refreshAddresses,
+                                modifier = Modifier.width(330.dp),
+                            )
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                            ConfigurationPane(
+                                folderName = folderName,
+                                treeUri = treeUri,
+                                portText = portText,
+                                onPortChange = { portText = it.filter(Char::isDigit).take(5) },
+                                pinText = pinText,
+                                onPinChange = { pinText = it.trim().take(12) },
+                                running = running,
+                                onChooseFolder = { folderPicker.launch(treeUri?.toUri()) },
+                                onGeneratePin = { pinText = AppPreferences.generatePin() },
+                                onStart = ::startServer,
+                                onStop = ::stopServer,
+                                onOpenHotspotSettings = { openHotspotSettings(context) },
+                            )
+                            HorizontalDivider()
+                            AccessPane(
+                                urls = urls,
+                                pin = pinText,
+                                running = running,
+                                onRefresh = ::refreshAddresses,
+                            )
+                        }
                     }
                 }
             }
-            HorizontalDivider()
-            RemoteDownloadPane(
-                running = remoteRunning,
-                status = remoteStatus,
-                error = remoteError,
-                policy = remotePolicy,
-                onPolicyChange = { policy ->
-                    remotePolicy = policy
-                    AppPreferences.saveRemoteNetworkPolicy(context, policy)
-                },
-                onStart = ::startRemoteDownloads,
-                onStop = ::stopRemoteDownloads,
+
+            AppTab.REMOTE -> Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 18.dp),
-            )
+                    .fillMaxSize()
+                    .padding(contentPadding)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                RemoteDownloadPane(
+                    running = remoteRunning,
+                    status = remoteStatus,
+                    error = remoteError,
+                    policy = remotePolicy,
+                    device = remoteDevice,
+                    onDeviceChange = { credentials ->
+                        remoteDevice = credentials
+                    },
+                    onPolicyChange = { policy ->
+                        remotePolicy = policy
+                        AppPreferences.saveRemoteNetworkPolicy(context, policy)
+                    },
+                    onStart = ::startRemoteDownloads,
+                    onStop = ::stopRemoteDownloads,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 18.dp),
+                )
+            }
         }
     }
 }
@@ -618,6 +694,8 @@ private fun RemoteDownloadPane(
     status: String,
     error: Boolean,
     policy: RemoteNetworkPolicy,
+    device: RemoteDeviceCredentials?,
+    onDeviceChange: (RemoteDeviceCredentials?) -> Unit,
     onPolicyChange: (RemoteNetworkPolicy) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -665,6 +743,14 @@ private fun RemoteDownloadPane(
             },
         )
 
+        DevicePairingSection(
+            device = device,
+            running = running,
+            onDeviceChange = onDeviceChange,
+            onStopRemote = onStop,
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
         Text(
             "计费网络",
             style = MaterialTheme.typography.labelLarge,
@@ -709,6 +795,7 @@ private fun RemoteDownloadPane(
             } else {
                 Button(
                     onClick = onStart,
+                    enabled = device != null,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text("启用远程下载")
@@ -730,6 +817,8 @@ private fun RemoteDownloadPane(
                 Text("复制")
             }
         }
+
+        AppUpdateSection()
     }
 }
 
@@ -778,4 +867,10 @@ private fun openHotspotSettings(context: Context) {
     }.recoverCatching {
         context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
     }
+}
+
+private enum class AppTab(val label: String) {
+    FILES("文件"),
+    LAN("局域网"),
+    REMOTE("远程"),
 }

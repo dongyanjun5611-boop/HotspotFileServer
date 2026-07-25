@@ -27,15 +27,38 @@ data class RemoteProgress(
 )
 
 class RemoteDownloadApi {
-    fun poll(): List<RemoteDownloadJob> {
-        val deviceName = URLEncoder.encode(
-            "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+    fun pair(code: String): RemoteDeviceCredentials {
+        val response = request(
+            method = "POST",
+            path = "/api/offline-download/device/pair",
+            body = JSONObject()
+                .put("code", code)
+                .put("deviceName", defaultDeviceName())
+                .put("platform", platformDescription())
+                .put("appVersion", BuildConfig.VERSION_NAME),
+        )
+        val device = response.getJSONObject("device")
+        return RemoteDeviceCredentials(
+            id = device.getString("id"),
+            name = device.getString("name"),
+            token = response.getString("deviceToken"),
+        )
+    }
+
+    fun poll(credentials: RemoteDeviceCredentials): List<RemoteDownloadJob> {
+        val platform = URLEncoder.encode(
+            platformDescription(),
             StandardCharsets.UTF_8.name(),
         )
-        val appVersion = URLEncoder.encode(BuildConfig.VERSION_NAME, StandardCharsets.UTF_8.name())
+        val appVersion = URLEncoder.encode(
+            BuildConfig.VERSION_NAME,
+            StandardCharsets.UTF_8.name(),
+        )
         val response = request(
             method = "GET",
-            path = "/api/offline-download/device/poll?deviceName=$deviceName&appVersion=$appVersion",
+            path = "/api/offline-download/device/poll" +
+                "?platform=$platform&appVersion=$appVersion",
+            token = credentials.token,
         )
         val jobs = response.optJSONArray("jobs") ?: JSONArray()
         return buildList {
@@ -53,7 +76,11 @@ class RemoteDownloadApi {
         }
     }
 
-    fun report(jobId: String, progress: RemoteProgress): Boolean {
+    fun report(
+        credentials: RemoteDeviceCredentials,
+        jobId: String,
+        progress: RemoteProgress,
+    ): Boolean {
         val body = JSONObject()
             .put("status", progress.status)
             .put("downloadedBytes", progress.downloadedBytes)
@@ -71,6 +98,7 @@ class RemoteDownloadApi {
             method = "POST",
             path = "/api/offline-download/device/jobs/${encodePath(jobId)}/progress",
             body = body,
+            token = credentials.token,
         ).optBoolean("cancelRequested", false)
     }
 
@@ -78,11 +106,8 @@ class RemoteDownloadApi {
         method: String,
         path: String,
         body: JSONObject? = null,
+        token: String? = null,
     ): JSONObject {
-        if (BuildConfig.REMOTE_DEVICE_TOKEN.isBlank()) {
-            throw RemoteApiException("当前安装包未配置远程设备令牌")
-        }
-
         val connection = URI("$BASE_URL$path").toURL().openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method
@@ -90,9 +115,12 @@ class RemoteDownloadApi {
             connection.readTimeout = 30_000
             connection.instanceFollowRedirects = false
             connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("Authorization", "Bearer ${BuildConfig.REMOTE_DEVICE_TOKEN}")
             connection.setRequestProperty("User-Agent", "HotspotFileServer/${BuildConfig.VERSION_NAME}")
             connection.setRequestProperty("X-App-Version", BuildConfig.VERSION_NAME)
+            connection.setRequestProperty("X-Device-Platform", platformDescription())
+            if (!token.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $token")
+            }
             if (body != null) {
                 val bytes = body.toString().toByteArray(StandardCharsets.UTF_8)
                 connection.doOutput = true
@@ -106,7 +134,9 @@ class RemoteDownloadApi {
             val text = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
             val json = runCatching { JSONObject(text) }.getOrElse { JSONObject() }
             if (status !in 200..299 || json.optBoolean("success", true).not()) {
-                val message = json.optString("message").ifBlank { "远程服务请求失败（$status）" }
+                val message = json.optString("message").ifBlank {
+                    "远程服务请求失败（$status）"
+                }
                 throw RemoteApiException(message, status)
             }
             return json
@@ -124,6 +154,12 @@ class RemoteDownloadApi {
 
     companion object {
         const val BASE_URL = "https://api.dongyanjun.xyz"
+
+        fun defaultDeviceName(): String =
+            "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+
+        fun platformDescription(): String =
+            "${defaultDeviceName()} · Android ${Build.VERSION.RELEASE}"
     }
 }
 

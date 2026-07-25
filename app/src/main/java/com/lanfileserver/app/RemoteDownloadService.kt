@@ -96,8 +96,9 @@ class RemoteDownloadService : Service() {
         publishStatus("远程下载已启用，等待任务")
         while (!stopRequested.get() && AppPreferences.remoteEnabled(this)) {
             try {
-                if (BuildConfig.REMOTE_DEVICE_TOKEN.isBlank()) {
-                    publishStatus("当前安装包未配置远程设备令牌", error = true)
+                val credentials = AppPreferences.remoteDevice(this)
+                if (credentials == null) {
+                    publishStatus("请先在远程页面配对这台设备", error = true)
                     waitForNextPoll(60_000L)
                     continue
                 }
@@ -109,7 +110,7 @@ class RemoteDownloadService : Service() {
                     continue
                 }
 
-                val job = api.poll().firstOrNull()
+                val job = api.poll(credentials).firstOrNull()
                 if (job == null) {
                     currentJobId = null
                     cancelCurrent.set(false)
@@ -122,7 +123,7 @@ class RemoteDownloadService : Service() {
                 currentJobId = job.id
                 cancelCurrent.set(job.status == STATUS_CANCEL_REQUESTED || locallyCanceled)
                 if (cancelCurrent.get()) {
-                    reportCanceled(job)
+                    reportCanceled(job, credentials)
                     continue
                 }
 
@@ -130,6 +131,7 @@ class RemoteDownloadService : Service() {
                 if (locallyCompleted != null) {
                     val (fileName, size) = locallyCompleted
                     api.report(
+                        credentials,
                         job.id,
                         RemoteProgress(
                             status = STATUS_COMPLETED,
@@ -146,20 +148,24 @@ class RemoteDownloadService : Service() {
                 }
 
                 if (!hasInternetConnection()) {
-                    reportWaiting(job, "等待可用网络")
+                    reportWaiting(job, credentials, "等待可用网络")
                     continue
                 }
 
                 if (isMeteredNetwork()) {
                     when (AppPreferences.remoteNetworkPolicy(this)) {
                         RemoteNetworkPolicy.UNMETERED_ONLY -> {
-                            reportWaiting(job, "当前是计费网络，等待非计费网络")
+                            reportWaiting(
+                                job,
+                                credentials,
+                                "当前是计费网络，等待非计费网络",
+                            )
                             continue
                         }
 
                         RemoteNetworkPolicy.ASK -> {
                             if (AppPreferences.approvedMeteredJob(this) != job.id) {
-                                reportMeteredApproval(job)
+                                reportMeteredApproval(job, credentials)
                                 continue
                             }
                         }
@@ -168,12 +174,16 @@ class RemoteDownloadService : Service() {
                     }
                 }
 
-                download(job, treeUri)
+                download(job, treeUri, credentials)
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
                 break
             } catch (error: Throwable) {
                 publishStatus(friendlyMessage(error), error = true)
+                if (error is RemoteApiException && error.statusCode == 401) {
+                    AppPreferences.saveRemoteEnabled(this, false)
+                    break
+                }
                 waitForNextPoll(if (error is RemoteApiException && error.statusCode == 401) 60_000L else 15_000L)
             }
         }
@@ -184,8 +194,13 @@ class RemoteDownloadService : Service() {
         stopSelf()
     }
 
-    private fun reportWaiting(job: RemoteDownloadJob, message: String) {
+    private fun reportWaiting(
+        job: RemoteDownloadJob,
+        credentials: RemoteDeviceCredentials,
+        message: String,
+    ) {
         api.report(
+            credentials,
             job.id,
             RemoteProgress(
                 status = STATUS_WAITING_NETWORK,
@@ -196,8 +211,12 @@ class RemoteDownloadService : Service() {
         waitForNextPoll(POLL_INTERVAL_MS)
     }
 
-    private fun reportMeteredApproval(job: RemoteDownloadJob) {
+    private fun reportMeteredApproval(
+        job: RemoteDownloadJob,
+        credentials: RemoteDeviceCredentials,
+    ) {
         val canceled = api.report(
+            credentials,
             job.id,
             RemoteProgress(
                 status = STATUS_AWAITING_METERED,
@@ -205,7 +224,7 @@ class RemoteDownloadService : Service() {
             ),
         )
         if (canceled) {
-            reportCanceled(job)
+            reportCanceled(job, credentials)
             return
         }
 
@@ -216,13 +235,18 @@ class RemoteDownloadService : Service() {
         waitForNextPoll(POLL_INTERVAL_MS)
     }
 
-    private fun download(job: RemoteDownloadJob, treeUri: String) {
+    private fun download(
+        job: RemoteDownloadJob,
+        treeUri: String,
+        credentials: RemoteDeviceCredentials,
+    ) {
         cancelCurrent.set(false)
         acquireWakeLock()
         var connection: HttpURLConnection? = null
         try {
             publishStatus("正在连接下载源…")
             val initialCanceled = api.report(
+                credentials,
                 job.id,
                 RemoteProgress(
                     status = STATUS_DOWNLOADING,
@@ -253,7 +277,7 @@ class RemoteDownloadService : Service() {
             val storage = StorageTree(this, treeUri.toUri())
 
             val result = connection.inputStream.use { input ->
-                storage.writeRootFile(fileName, mimeType) { output ->
+                storage.writeFile("", fileName, mimeType) { output ->
                     val buffer = ByteArray(64 * 1024)
                     var downloaded = 0L
                     var lastReportedBytes = 0L
@@ -271,6 +295,7 @@ class RemoteDownloadService : Service() {
                             val speed = ((downloaded - lastReportedBytes) * 1_000L / elapsedMs)
                                 .coerceAtLeast(0L)
                             val canceled = api.report(
+                                credentials,
                                 job.id,
                                 RemoteProgress(
                                     status = STATUS_DOWNLOADING,
@@ -296,6 +321,7 @@ class RemoteDownloadService : Service() {
 
             AppPreferences.markLocallyCompleted(this, job.id, result.name, result.size)
             api.report(
+                credentials,
                 job.id,
                 RemoteProgress(
                     status = STATUS_COMPLETED,
@@ -309,11 +335,12 @@ class RemoteDownloadService : Service() {
             AppPreferences.clearApprovedMeteredJob(this, job.id)
             publishStatus("下载完成：${result.name}")
         } catch (_: DownloadCanceledException) {
-            reportCanceled(job)
+            reportCanceled(job, credentials)
         } catch (error: Throwable) {
             val message = friendlyMessage(error)
             runCatching {
                 api.report(
+                    credentials,
                     job.id,
                     RemoteProgress(
                         status = STATUS_FAILED,
@@ -332,9 +359,13 @@ class RemoteDownloadService : Service() {
         }
     }
 
-    private fun reportCanceled(job: RemoteDownloadJob) {
+    private fun reportCanceled(
+        job: RemoteDownloadJob,
+        credentials: RemoteDeviceCredentials,
+    ) {
         val reported = runCatching {
             api.report(
+                credentials,
                 job.id,
                 RemoteProgress(
                     status = STATUS_CANCELED,

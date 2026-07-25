@@ -94,7 +94,7 @@ class StorageTree(
             }
             val created = parent.createDirectory(safeName)
                 ?: throw IOException("无法创建文件夹")
-            return Entry(
+            val entry = Entry(
                 name = created.name ?: safeName,
                 path = SafePath.join(normalizedParent, created.name ?: safeName),
                 directory = true,
@@ -102,6 +102,8 @@ class StorageTree(
                 modifiedAt = created.lastModified().coerceAtLeast(0L),
                 mimeType = "inode/directory",
             )
+            FileChangeNotifier.notify(context)
+            return entry
         }
     }
 
@@ -136,24 +138,28 @@ class StorageTree(
         }
 
         val finalName = document.name ?: actualName
-        return UploadResult(
+        val result = UploadResult(
             name = finalName,
             path = SafePath.join(normalizedParent, finalName),
             size = contentLength,
         )
+        FileChangeNotifier.notify(context)
+        return result
     }
 
-    fun writeRootFile(
+    fun writeFile(
+        parentPath: String,
         requestedName: String,
         mimeType: String,
         writer: (OutputStream) -> Long,
     ): UploadResult {
         val safeName = SafePath.sanitizeName(requestedName)
         val safeMimeType = mimeType.ifBlank { mimeTypeFor(safeName) }
+        val normalizedParent = SafePath.normalize(parentPath)
         val (document, actualName) = synchronized(mutationLock) {
-            if (!root.canWrite()) throw SecurityException("共享文件夹不可写")
-            val availableName = uniqueName(root, safeName)
-            val created = root.createFile(safeMimeType, availableName)
+            val parent = requireDirectory(normalizedParent)
+            val availableName = uniqueName(parent, safeName)
+            val created = parent.createFile(safeMimeType, availableName)
                 ?: throw IOException("无法创建下载文件")
             created to availableName
         }
@@ -170,11 +176,13 @@ class StorageTree(
         }
 
         val finalName = document.name ?: actualName
-        return UploadResult(
+        val result = UploadResult(
             name = finalName,
-            path = finalName,
+            path = SafePath.join(normalizedParent, finalName),
             size = size,
         )
+        FileChangeNotifier.notify(context)
+        return result
     }
 
     fun rename(path: String, requestedName: String): Entry {
@@ -195,7 +203,7 @@ class StorageTree(
             val renamed = parent.findFile(safeName)
                 ?: throw IOException("重命名后无法读取目标")
             val actualName = renamed.name ?: safeName
-            return Entry(
+            val entry = Entry(
                 name = actualName,
                 path = SafePath.join(parentPath, actualName),
                 directory = renamed.isDirectory,
@@ -203,6 +211,8 @@ class StorageTree(
                 modifiedAt = renamed.lastModified().coerceAtLeast(0L),
                 mimeType = renamed.type ?: mimeTypeFor(actualName),
             )
+            FileChangeNotifier.notify(context)
+            return entry
         }
     }
 
@@ -212,8 +222,12 @@ class StorageTree(
         synchronized(mutationLock) {
             val document = resolve(normalized) ?: throw FileNotFoundException("目标不存在")
             if (!document.delete()) throw IOException("删除失败")
+            FileChangeNotifier.notify(context)
         }
     }
+
+    fun uriFor(path: String): Uri =
+        resolve(path)?.uri ?: throw FileNotFoundException("目标不存在")
 
     private fun resolve(path: String): DocumentFile? {
         var current = root

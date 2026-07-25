@@ -16,6 +16,10 @@ object AppPreferences {
     private const val KEY_COMPLETED_FILE_NAME = "completed_file_name"
     private const val KEY_COMPLETED_FILE_SIZE = "completed_file_size"
     private const val KEY_PENDING_CANCELED_JOB = "pending_canceled_job"
+    private const val KEY_REMOTE_DEVICE_ID = "remote_device_id"
+    private const val KEY_REMOTE_DEVICE_NAME = "remote_device_name"
+    private const val KEY_REMOTE_DEVICE_TOKEN = "remote_device_token"
+    private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
 
     const val DEFAULT_PORT = 8080
 
@@ -121,6 +125,43 @@ object AppPreferences {
         }
     }
 
+    fun remoteDevice(context: Context): RemoteDeviceCredentials? {
+        val id = prefs(context).getString(KEY_REMOTE_DEVICE_ID, null)
+        val name = prefs(context).getString(KEY_REMOTE_DEVICE_NAME, null)
+        val token = prefs(context).getString(KEY_REMOTE_DEVICE_TOKEN, null)
+        return if (id.isNullOrBlank() || name.isNullOrBlank() || token.isNullOrBlank()) {
+            null
+        } else {
+            RemoteDeviceCredentials(id = id, name = name, token = token)
+        }
+    }
+
+    fun saveRemoteDevice(context: Context, credentials: RemoteDeviceCredentials) {
+        prefs(context).edit {
+            putString(KEY_REMOTE_DEVICE_ID, credentials.id)
+            putString(KEY_REMOTE_DEVICE_NAME, credentials.name)
+            putString(KEY_REMOTE_DEVICE_TOKEN, credentials.token)
+        }
+    }
+
+    fun clearRemoteDevice(context: Context) {
+        prefs(context).edit {
+            remove(KEY_REMOTE_DEVICE_ID)
+            remove(KEY_REMOTE_DEVICE_NAME)
+            remove(KEY_REMOTE_DEVICE_TOKEN)
+            putBoolean(KEY_REMOTE_ENABLED, false)
+            remove(KEY_APPROVED_METERED_JOB)
+            remove(KEY_PENDING_CANCELED_JOB)
+        }
+    }
+
+    fun lastUpdateCheck(context: Context): Long =
+        prefs(context).getLong(KEY_LAST_UPDATE_CHECK, 0L)
+
+    fun markUpdateChecked(context: Context, checkedAt: Long = System.currentTimeMillis()) {
+        prefs(context).edit { putLong(KEY_LAST_UPDATE_CHECK, checkedAt) }
+    }
+
     fun generatePin(): String =
         (SecureRandom().nextInt(900_000) + 100_000).toString()
 
@@ -133,3 +174,9 @@ enum class RemoteNetworkPolicy {
     ASK,
     ALWAYS,
 }
+
+data class RemoteDeviceCredentials(
+    val id: String,
+    val name: String,
+    val token: String,
+)

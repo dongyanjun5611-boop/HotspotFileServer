@@ -500,6 +500,9 @@ class RemoteDownloadService : Service() {
         notificationManager().createNotificationChannel(channel)
     }
 
+    private fun notificationManager(): NotificationManager =
+        getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
     private fun publishStatus(
         message: String,
         error: Boolean = false,

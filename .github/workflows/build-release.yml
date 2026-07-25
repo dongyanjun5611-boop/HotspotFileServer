@@ -1,0 +1,80 @@
+name: Build and release APK
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/hotspot-file-server.jks
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Restore release signing key
+        env:
+          ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+        run: |
+          test -n "$ANDROID_SIGNING_KEY"
+          printf '%s' "$ANDROID_SIGNING_KEY" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+
+      - name: Test, lint and build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest lintDebug assembleRelease \
+            --no-daemon \
+            --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp app/build/outputs/apk/release/app-release.apk release/hotspot-file-server.apk
+          cd release
+          sha256sum hotspot-file-server.apk > SHA256SUMS.txt
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: hotspot-file-server-${{ github.sha }}
+          path: |
+            release/hotspot-file-server.apk
+            release/SHA256SUMS.txt
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/hotspot-file-server.apk \
+            release/SHA256SUMS.txt \
+            --verify-tag \
+            --title "热点文件站 $GITHUB_REF_NAME" \
+            --generate-notes

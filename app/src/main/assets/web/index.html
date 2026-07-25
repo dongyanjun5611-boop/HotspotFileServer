@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>热点文件站</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f9fb;
+      --surface: #ffffff;
+      --surface-2: #eef3f5;
+      --text: #172033;
+      --muted: #647184;
+      --line: #d7dee6;
+      --primary: #0f766e;
+      --primary-soft: #ccfbf1;
+      --primary-text: #134e4a;
+      --accent: #c2410c;
+      --danger: #b42318;
+      --danger-soft: #fee4e2;
+      --hover: #edf4f4;
+      --shadow: 0 10px 30px rgba(30, 41, 59, .08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #111827;
+        --surface: #18212e;
+        --surface-2: #273445;
+        --text: #f1f5f9;
+        --muted: #aab6c5;
+        --line: #3b485b;
+        --primary: #2dd4bf;
+        --primary-soft: #115e59;
+        --primary-text: #ccfbf1;
+        --accent: #fdba74;
+        --danger: #fda29b;
+        --danger-soft: #541f24;
+        --hover: #22303d;
+        --shadow: 0 10px 30px rgba(0, 0, 0, .25);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    button, input { font: inherit; }
+    button { letter-spacing: 0; }
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      display: flex;
+      align-items: center;
+      min-height: 64px;
+      padding: 10px max(18px, env(safe-area-inset-left));
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      backdrop-filter: blur(12px);
+    }
+    .brand {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 11px;
+    }
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: var(--primary);
+      color: #fff;
+    }
+    .brand-mark svg { width: 22px; height: 22px; }
+    .brand-copy { min-width: 0; }
+    .brand-title {
+      overflow: hidden;
+      font-size: 16px;
+      font-weight: 750;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .brand-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-left: auto;
+    }
+    .button, .icon-button {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .button.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+    }
+    .button:hover, .icon-button:hover { background: var(--hover); }
+    .button.primary:hover { filter: brightness(.92); }
+    .icon-button {
+      width: 38px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+    }
+    .icon-button.danger { color: var(--danger); }
+    .icon-button svg, .button svg {
+      width: 17px;
+      height: 17px;
+      flex: 0 0 auto;
+    }
+    .main {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: 22px 20px 64px;
+    }
+    .pathbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 42px;
+      margin-bottom: 12px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .crumb {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 6px 3px;
+    }
+    .crumb:hover, .crumb.current { color: var(--text); }
+    .crumb.current { font-weight: 700; }
+    .crumb svg, .crumb-separator svg { width: 16px; height: 16px; }
+    .crumb-separator {
+      display: inline-flex;
+      color: var(--muted);
+    }
+    .notice {
+      display: none;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+    .notice.show { display: block; }
+    .notice.error {
+      border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    .file-panel {
+      min-height: 360px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .file-header, .file-row {
+      display: grid;
+      grid-template-columns: minmax(230px, 1fr) 130px 180px 132px;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px;
+    }
+    .file-header {
+      height: 42px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .file-row {
+      min-height: 58px;
+      border-bottom: 1px solid var(--line);
+    }
+    .file-row:last-child { border-bottom: 0; }
+    .file-row:hover { background: var(--hover); }
+    .name-cell {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .type-icon {
+      width: 32px;
+      height: 32px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--surface-2);
+      color: var(--muted);
+    }
+    .type-icon.folder {
+      background: var(--primary-soft);
+      color: var(--primary-text);
+    }
+    .type-icon svg { width: 18px; height: 18px; }
+    .name-button {
+      min-width: 0;
+      overflow: hidden;
+      padding: 6px 0;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 600;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .name-button:hover { color: var(--primary); }
+    .meta {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 13px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .row-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+    .row-actions .icon-button {
+      width: 34px;
+      height: 34px;
+      border-color: transparent;
+      background: transparent;
+    }
+    .empty {
+      min-height: 315px;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .empty svg {
+      width: 42px;
+      height: 42px;
+      margin-bottom: 10px;
+      opacity: .55;
+    }
+    .upload-panel {
+      position: fixed;
+      z-index: 40;
+      right: 20px;
+      bottom: max(20px, env(safe-area-inset-bottom));
+      width: min(410px, calc(100vw - 40px));
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 18px 50px rgba(15, 23, 42, .22);
+    }
+    .upload-panel[hidden] { display: none; }
+    .upload-top {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .upload-copy {
+      min-width: 0;
+      flex: 1;
+    }
+    .upload-title {
+      overflow: hidden;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .upload-meta { color: var(--muted); font-size: 12px; }
+    .progress {
+      height: 7px;
+      margin-top: 11px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--surface-2);
+    }
+    .progress-value {
+      width: 0;
+      height: 100%;
+      background: var(--primary);
+      transition: width .12s linear;
+    }
+    .drop-overlay {
+      position: fixed;
+      z-index: 60;
+      inset: 14px;
+      display: none;
+      place-items: center;
+      border: 2px dashed var(--primary);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--bg) 88%, transparent);
+      color: var(--primary);
+      font-size: 22px;
+      font-weight: 750;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
+    }
+    body.dragging .drop-overlay { display: grid; }
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid var(--line);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #fileInput { display: none; }
+    @media (max-width: 760px) {
+      .topbar { min-height: 58px; padding: 9px 12px; }
+      .brand-mark { width: 34px; height: 34px; }
+      .brand-subtitle { display: none; }
+      .button-label { display: none; }
+      .button { width: 38px; justify-content: center; padding: 0; }
+      .toolbar { gap: 4px; }
+      .main { padding: 14px 10px 48px; }
+      .file-panel { border-radius: 6px; box-shadow: none; }
+      .file-header { display: none; }
+      .file-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        min-height: 64px;
+        padding: 0 9px;
+      }
+      .file-row > .meta { display: none; }
+      .row-actions { gap: 0; }
+      .row-actions .icon-button { width: 32px; }
+      .upload-panel {
+        right: 10px;
+        bottom: max(10px, env(safe-area-inset-bottom));
+        width: calc(100vw - 20px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" id="brandIcon" aria-hidden="true"></div>
+      <div class="brand-copy">
+        <div id="rootName" class="brand-title">热点文件站</div>
+        <div class="brand-subtitle">局域网文件管理</div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <label class="button primary" for="fileInput" title="上传文件">
+        <span id="uploadIcon" aria-hidden="true"></span>
+        <span class="button-label">上传</span>
+      </label>
+      <input id="fileInput" type="file" multiple>
+      <button id="mkdirButton" class="button" type="button" title="新建文件夹">
+        <span id="mkdirIcon" aria-hidden="true"></span>
+        <span class="button-label">新建文件夹</span>
+      </button>
+      <button id="refreshButton" class="icon-button" type="button" title="刷新"></button>
+      <button id="logoutButton" class="icon-button" type="button" title="退出登录"></button>
+    </div>
+  </header>
+
+  <main class="main">
+    <nav id="breadcrumbs" class="pathbar" aria-label="当前路径"></nav>
+    <div id="notice" class="notice" role="status"></div>
+    <section class="file-panel" aria-label="文件列表">
+      <div class="file-header">
+        <span>名称</span>
+        <span>大小</span>
+        <span>修改时间</span>
+        <span></span>
+      </div>
+      <div id="fileList"></div>
+    </section>
+  </main>
+
+  <aside id="uploadPanel" class="upload-panel" hidden>
+    <div class="upload-top">
+      <div class="upload-copy">
+        <div id="uploadTitle" class="upload-title"></div>
+        <div id="uploadMeta" class="upload-meta"></div>
+      </div>
+      <button id="cancelUpload" class="icon-button" type="button" title="取消上传"></button>
+    </div>
+    <div class="progress"><div id="progressValue" class="progress-value"></div></div>
+  </aside>
+
+  <div class="drop-overlay">放下文件以上传</div>
+
+  <script>
+    const ICONS = {
+      server: '<rect width="18" height="7" x="3" y="3" rx="1"/><rect width="18" height="7" x="3" y="14" rx="1"/><path d="M7 7h.01M7 18h.01"/>',
+      upload: '<path d="M12 3v12m0-12 4 4m-4-4-4 4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
+      folderPlus: '<path d="M3 6h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 11v6m-3-3h6"/>',
+      refresh: '<path d="M20 6v5h-5"/><path d="M19 11a7 7 0 1 0 1 5"/>',
+      logout: '<path d="M10 17l5-5-5-5m5 5H3"/><path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/>',
+      home: '<path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/>',
+      chevron: '<path d="m9 18 6-6-6-6"/>',
+      folder: '<path d="M3 6h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+      file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
+      download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/>',
+      edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>',
+      trash: '<path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6"/><path d="M10 11v6m4-6v6"/>',
+      x: '<path d="m18 6-12 12M6 6l12 12"/>',
+      empty: '<path d="M3 6h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 14h6"/>'
+    };
+
+    function icon(name) {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+    }
+
+    document.getElementById("brandIcon").innerHTML = icon("server");
+    document.getElementById("uploadIcon").innerHTML = icon("upload");
+    document.getElementById("mkdirIcon").innerHTML = icon("folderPlus");
+    document.getElementById("refreshButton").innerHTML = icon("refresh");
+    document.getElementById("logoutButton").innerHTML = icon("logout");
+    document.getElementById("cancelUpload").innerHTML = icon("x");
+
+    const fileList = document.getElementById("fileList");
+    const breadcrumbs = document.getElementById("breadcrumbs");
+    const notice = document.getElementById("notice");
+    const fileInput = document.getElementById("fileInput");
+    const uploadPanel = document.getElementById("uploadPanel");
+    const uploadTitle = document.getElementById("uploadTitle");
+    const uploadMeta = document.getElementById("uploadMeta");
+    const progressValue = document.getElementById("progressValue");
+
+    let currentPath = "";
+    let rootName = "共享文件夹";
+    let currentUpload = null;
+    let dragDepth = 0;
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, { credentials: "same-origin", ...options });
+      if (response.status === 401) {
+        location.reload();
+        throw new Error("登录已失效");
+      }
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `请求失败 (${response.status})`);
+      return body;
+    }
+
+    async function initialize() {
+      try {
+        const info = await requestJson("/api/info");
+        rootName = info.rootName || rootName;
+        document.getElementById("rootName").textContent = rootName;
+        await loadPath("");
+      } catch (error) {
+        showNotice(error.message, true);
+      }
+    }
+
+    async function loadPath(path) {
+      currentPath = path || "";
+      renderBreadcrumbs();
+      fileList.innerHTML = '<div class="empty"><div class="spinner" aria-label="正在加载"></div></div>';
+      try {
+        const data = await requestJson(`/api/list?path=${encodeURIComponent(currentPath)}`);
+        currentPath = data.path || "";
+        renderBreadcrumbs();
+        renderFiles(data.items || []);
+        hideNotice();
+      } catch (error) {
+        fileList.innerHTML = "";
+        showNotice(error.message, true);
+      }
+    }
+
+    function renderBreadcrumbs() {
+      breadcrumbs.replaceChildren();
+      const root = crumbButton(rootName, "", currentPath === "", true);
+      breadcrumbs.append(root);
+
+      let path = "";
+      currentPath.split("/").filter(Boolean).forEach((segment, index, all) => {
+        const separator = document.createElement("span");
+        separator.className = "crumb-separator";
+        separator.innerHTML = icon("chevron");
+        breadcrumbs.append(separator);
+
+        path = path ? `${path}/${segment}` : segment;
+        breadcrumbs.append(crumbButton(segment, path, index === all.length - 1, false));
+      });
+    }
+
+    function crumbButton(label, path, current, home) {
+      const button = document.createElement("button");
+      button.className = `crumb${current ? " current" : ""}`;
+      button.type = "button";
+      if (home) {
+        const holder = document.createElement("span");
+        holder.innerHTML = icon("home");
+        button.append(holder);
+      }
+      const text = document.createElement("span");
+      text.textContent = label;
+      button.append(text);
+      button.addEventListener("click", () => loadPath(path));
+      return button;
+    }
+
+    function renderFiles(items) {
+      fileList.replaceChildren();
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.innerHTML = `<div><div>${icon("empty")}</div><div>这个文件夹是空的</div></div>`;
+        fileList.append(empty);
+        return;
+      }
+
+      items.forEach(item => {
+        const row = document.createElement("div");
+        row.className = "file-row";
+
+        const nameCell = document.createElement("div");
+        nameCell.className = "name-cell";
+        const type = document.createElement("span");
+        type.className = `type-icon${item.directory ? " folder" : ""}`;
+        type.innerHTML = icon(item.directory ? "folder" : "file");
+        const name = document.createElement("button");
+        name.className = "name-button";
+        name.type = "button";
+        name.textContent = item.name;
+        name.title = item.name;
+        name.addEventListener("click", () => {
+          if (item.directory) loadPath(item.path);
+          else downloadItem(item);
+        });
+        nameCell.append(type, name);
+
+        const size = document.createElement("div");
+        size.className = "meta";
+        size.textContent = item.directory ? "文件夹" : formatSize(item.size);
+
+        const modified = document.createElement("div");
+        modified.className = "meta";
+        modified.textContent = item.modifiedAt ? formatTime(item.modifiedAt) : "—";
+
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+        if (!item.directory) {
+          actions.append(actionButton("download", "下载", () => downloadItem(item)));
+        }
+        actions.append(actionButton("edit", "重命名", () => renameItem(item)));
+        actions.append(actionButton("trash", "删除", () => deleteItem(item), true));
+
+        row.append(nameCell, size, modified, actions);
+        fileList.append(row);
+      });
+    }
+
+    function actionButton(iconName, title, handler, danger = false) {
+      const button = document.createElement("button");
+      button.className = `icon-button${danger ? " danger" : ""}`;
+      button.type = "button";
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.innerHTML = icon(iconName);
+      button.addEventListener("click", handler);
+      return button;
+    }
+
+    function downloadItem(item) {
+      const anchor = document.createElement("a");
+      anchor.href = `/api/download?path=${encodeURIComponent(item.path)}`;
+      anchor.download = item.name;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+    }
+
+    async function createDirectory() {
+      const name = prompt("新文件夹名称");
+      if (!name || !name.trim()) return;
+      try {
+        await requestJson(
+          `/api/mkdir?path=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(name.trim())}`,
+          { method: "POST" }
+        );
+        await loadPath(currentPath);
+      } catch (error) {
+        showNotice(error.message, true);
+      }
+    }
+
+    async function renameItem(item) {
+      const name = prompt("新名称", item.name);
+      if (!name || name.trim() === item.name) return;
+      try {
+        await requestJson(
+          `/api/rename?path=${encodeURIComponent(item.path)}&name=${encodeURIComponent(name.trim())}`,
+          { method: "POST" }
+        );
+        await loadPath(currentPath);
+      } catch (error) {
+        showNotice(error.message, true);
+      }
+    }
+
+    async function deleteItem(item) {
+      const kind = item.directory ? "文件夹" : "文件";
+      if (!confirm(`确定删除${kind}“${item.name}”吗？此操作无法撤销。`)) return;
+      try {
+        await requestJson(
+          `/api/delete?path=${encodeURIComponent(item.path)}`,
+          { method: "POST" }
+        );
+        await loadPath(currentPath);
+      } catch (error) {
+        showNotice(error.message, true);
+      }
+    }
+
+    async function uploadFiles(fileCollection) {
+      const files = Array.from(fileCollection || []);
+      if (!files.length || currentUpload) return;
+
+      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+      let completedBytes = 0;
+      uploadPanel.hidden = false;
+      hideNotice();
+
+      try {
+        for (let index = 0; index < files.length; index++) {
+          const file = files[index];
+          uploadTitle.textContent = file.name;
+          uploadMeta.textContent = `${index + 1} / ${files.length}`;
+          await uploadOne(file, loaded => {
+            const done = completedBytes + loaded;
+            const percentage = totalBytes ? Math.round(done * 100 / totalBytes) : 100;
+            progressValue.style.width = `${Math.min(100, percentage)}%`;
+            uploadMeta.textContent = `${index + 1} / ${files.length} · ${formatSize(done)} / ${formatSize(totalBytes)}`;
+          });
+          completedBytes += file.size;
+        }
+        showNotice(`已上传 ${files.length} 个文件`, false);
+        await loadPath(currentPath);
+      } catch (error) {
+        if (error.message !== "已取消上传") showNotice(error.message, true);
+      } finally {
+        currentUpload = null;
+        uploadPanel.hidden = true;
+        progressValue.style.width = "0";
+        fileInput.value = "";
+      }
+    }
+
+    function uploadOne(file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        currentUpload = xhr;
+        xhr.open(
+          "PUT",
+          `/api/upload?path=${encodeURIComponent(currentPath)}&name=${encodeURIComponent(file.name)}`
+        );
+        xhr.withCredentials = true;
+        xhr.upload.addEventListener("progress", event => {
+          if (event.lengthComputable) onProgress(event.loaded);
+        });
+        xhr.addEventListener("load", () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+            return;
+          }
+          if (xhr.status === 401) location.reload();
+          let message = `上传失败 (${xhr.status})`;
+          try { message = JSON.parse(xhr.responseText).error || message; } catch (_) {}
+          reject(new Error(message));
+        });
+        xhr.addEventListener("error", () => reject(new Error("上传连接中断")));
+        xhr.addEventListener("abort", () => reject(new Error("已取消上传")));
+        xhr.send(file);
+      });
+    }
+
+    function showNotice(message, error) {
+      notice.textContent = message;
+      notice.className = `notice show${error ? " error" : ""}`;
+    }
+
+    function hideNotice() {
+      notice.className = "notice";
+      notice.textContent = "";
+    }
+
+    function formatSize(bytes) {
+      if (!Number.isFinite(bytes) || bytes < 0) return "—";
+      if (bytes < 1024) return `${bytes} B`;
+      const units = ["KB", "MB", "GB", "TB"];
+      let value = bytes / 1024;
+      let index = 0;
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index++;
+      }
+      return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[index]}`;
+    }
+
+    function formatTime(timestamp) {
+      return new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      }).format(new Date(timestamp));
+    }
+
+    document.getElementById("mkdirButton").addEventListener("click", createDirectory);
+    document.getElementById("refreshButton").addEventListener("click", () => loadPath(currentPath));
+    document.getElementById("logoutButton").addEventListener("click", async () => {
+      await fetch("/logout", { method: "POST", credentials: "same-origin" });
+      location.reload();
+    });
+    document.getElementById("cancelUpload").addEventListener("click", () => currentUpload?.abort());
+    fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
+
+    document.addEventListener("dragenter", event => {
+      event.preventDefault();
+      dragDepth++;
+      document.body.classList.add("dragging");
+    });
+    document.addEventListener("dragover", event => event.preventDefault());
+    document.addEventListener("dragleave", event => {
+      event.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (!dragDepth) document.body.classList.remove("dragging");
+    });
+    document.addEventListener("drop", event => {
+      event.preventDefault();
+      dragDepth = 0;
+      document.body.classList.remove("dragging");
+      uploadFiles(event.dataTransfer.files);
+    });
+
+    initialize();
+  </script>
+</body>
+</html>

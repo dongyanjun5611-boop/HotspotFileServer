@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>登录 - 热点文件站</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f1f5f7;
+      --surface: #ffffff;
+      --text: #172033;
+      --muted: #637083;
+      --line: #cbd5df;
+      --primary: #0f766e;
+      --primary-hover: #0b5f59;
+      --error: #b42318;
+      --shadow: 0 18px 48px rgba(30, 41, 59, .12);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #111827;
+        --surface: #18212e;
+        --text: #f1f5f9;
+        --muted: #aab6c5;
+        --line: #445164;
+        --primary: #2dd4bf;
+        --primary-hover: #5eead4;
+        --error: #fda29b;
+        --shadow: 0 18px 48px rgba(0, 0, 0, .35);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    .login {
+      width: min(100%, 380px);
+      padding: 30px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .mark {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 22px;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+    }
+    .mark svg { width: 27px; height: 27px; }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+    p { margin: 0 0 22px; color: var(--muted); }
+    label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    input {
+      width: 100%;
+      height: 48px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 18px;
+      letter-spacing: 0;
+      outline: none;
+    }
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+    }
+    button {
+      width: 100%;
+      height: 46px;
+      margin-top: 14px;
+      border: 0;
+      border-radius: 6px;
+      background: var(--primary);
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:disabled { opacity: .55; cursor: wait; }
+    .error {
+      min-height: 22px;
+      margin-top: 12px;
+      color: var(--error);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <main class="login">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7h5l2 2h11v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>
+        <path d="M7 14h.01M11 14h6"/>
+      </svg>
+    </div>
+    <h1>热点文件站</h1>
+    <p>输入主设备上显示的访问码</p>
+    <form id="loginForm">
+      <label for="pin">访问码</label>
+      <input id="pin" name="pin" type="text" inputmode="numeric" autocomplete="one-time-code"
+             minlength="4" maxlength="12" autofocus required>
+      <button id="submit" type="submit">进入文件站</button>
+      <div id="error" class="error" role="alert"></div>
+    </form>
+  </main>
+  <script>
+    const form = document.getElementById("loginForm");
+    const pin = document.getElementById("pin");
+    const submit = document.getElementById("submit");
+    const error = document.getElementById("error");
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      error.textContent = "";
+      submit.disabled = true;
+      try {
+        const response = await fetch("/login", {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          body: pin.value.trim(),
+          credentials: "same-origin"
+        });
+        if (response.ok) {
+          location.replace("/");
+          return;
+        }
+        const body = await response.json().catch(() => ({}));
+        error.textContent = body.error || "登录失败";
+        pin.select();
+      } catch (_) {
+        error.textContent = "无法连接到主设备";
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+

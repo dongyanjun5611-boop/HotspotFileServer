@@ -38,18 +38,18 @@ app\build\outputs\apk\debug\app-debug.apk
 
 项目使用 Android Gradle Plugin 9.0.1、Gradle 9.1、JDK 17 和 API 36。
 
-## GitHub 自动构建与发布
+## GitHub Actions 云端构建
 
-仓库内的 `.github/workflows/build-release.yml` 会在推送和手动运行时执行单元测试、lint 和 Release APK 构建。
+仓库内的 `.github/workflows/build-release.yml` 会在推送和手动运行时执行单元测试、lint 和签名 Release APK 构建。
 
-发布版本时推送形如 `v1.0.0` 的标签，工作流会自动创建 GitHub Release，并上传：
+工作流完成后会生成名为 `hotspot-file-server-apk` 的 Actions Artifact，其中包含：
 
 ```text
 hotspot-file-server.apk
 SHA256SUMS.txt
 ```
 
-Release 构建使用仓库 Secrets 中保存的独立签名密钥，后续版本保持相同签名，可直接覆盖升级。
+Release 构建使用仓库 Secrets 中保存的独立签名密钥，后续版本保持相同签名，可直接覆盖升级。GitHub 仅用于云端构建，最终 APK 由服务器下载并放入独立的公网下载目录。
 
 ## 使用
 

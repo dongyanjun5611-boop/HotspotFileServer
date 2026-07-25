@@ -42,6 +42,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -92,6 +93,12 @@ private fun ServerControlScreen() {
     var running by remember { mutableStateOf(FileServerService.running) }
     var error by remember { mutableStateOf(FileServerService.lastError) }
     var urls by remember { mutableStateOf(NetworkAddresses.urls(portText.toIntOrNull() ?: 0)) }
+    var remoteRunning by remember { mutableStateOf(RemoteDownloadService.running) }
+    var remoteStatus by remember { mutableStateOf(RemoteDownloadService.lastStatus) }
+    var remoteError by remember { mutableStateOf(RemoteDownloadService.lastError) }
+    var remotePolicy by remember {
+        mutableStateOf(AppPreferences.remoteNetworkPolicy(context))
+    }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -118,15 +125,39 @@ private fun ServerControlScreen() {
     DisposableEffect(context) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(receiverContext: Context?, intent: Intent?) {
-                running = intent?.getBooleanExtra(FileServerService.EXTRA_RUNNING, false) == true
-                error = intent?.getStringExtra(FileServerService.EXTRA_ERROR)
-                urls = NetworkAddresses.urls(portText.toIntOrNull() ?: AppPreferences.DEFAULT_PORT)
+                when (intent?.action) {
+                    FileServerService.ACTION_STATE_CHANGED -> {
+                        running = intent.getBooleanExtra(FileServerService.EXTRA_RUNNING, false)
+                        error = intent.getStringExtra(FileServerService.EXTRA_ERROR)
+                        urls = NetworkAddresses.urls(
+                            portText.toIntOrNull() ?: AppPreferences.DEFAULT_PORT,
+                        )
+                    }
+
+                    RemoteDownloadService.ACTION_STATE_CHANGED -> {
+                        remoteRunning = intent.getBooleanExtra(
+                            RemoteDownloadService.EXTRA_RUNNING,
+                            false,
+                        )
+                        remoteStatus = intent.getStringExtra(
+                            RemoteDownloadService.EXTRA_STATUS,
+                        ).orEmpty()
+                        remoteError = intent.getBooleanExtra(
+                            RemoteDownloadService.EXTRA_ERROR,
+                            false,
+                        )
+                    }
+                }
             }
+        }
+        val filter = IntentFilter().apply {
+            addAction(FileServerService.ACTION_STATE_CHANGED)
+            addAction(RemoteDownloadService.ACTION_STATE_CHANGED)
         }
         ContextCompat.registerReceiver(
             context,
             receiver,
-            IntentFilter(FileServerService.ACTION_STATE_CHANGED),
+            filter,
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         onDispose { context.unregisterReceiver(receiver) }
@@ -134,6 +165,18 @@ private fun ServerControlScreen() {
 
     LaunchedEffect(portText, running) {
         urls = NetworkAddresses.urls(portText.toIntOrNull() ?: AppPreferences.DEFAULT_PORT)
+    }
+
+    LaunchedEffect(Unit) {
+        if (AppPreferences.remoteEnabled(context) && !RemoteDownloadService.running) {
+            runCatching {
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, RemoteDownloadService::class.java)
+                        .setAction(RemoteDownloadService.ACTION_START),
+                )
+            }
+        }
     }
 
     val folderName = remember(treeUri) {
@@ -179,6 +222,45 @@ private fun ServerControlScreen() {
             Intent(context, FileServerService::class.java)
                 .setAction(FileServerService.ACTION_STOP),
         )
+    }
+
+    fun startRemoteDownloads() {
+        if (treeUri.isNullOrBlank()) {
+            remoteStatus = "请先选择一个共享文件夹"
+            remoteError = true
+            return
+        }
+        if (BuildConfig.REMOTE_DEVICE_TOKEN.isBlank()) {
+            remoteStatus = "当前安装包未配置远程设备令牌"
+            remoteError = true
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        remoteError = false
+        AppPreferences.saveRemoteEnabled(context, true)
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, RemoteDownloadService::class.java)
+                .setAction(RemoteDownloadService.ACTION_START),
+        )
+    }
+
+    fun stopRemoteDownloads() {
+        AppPreferences.saveRemoteEnabled(context, false)
+        context.startService(
+            Intent(context, RemoteDownloadService::class.java)
+                .setAction(RemoteDownloadService.ACTION_STOP),
+        )
+        remoteRunning = false
+        remoteStatus = "远程下载未启用"
+        remoteError = false
     }
 
     Scaffold(
@@ -273,6 +355,22 @@ private fun ServerControlScreen() {
                     }
                 }
             }
+            HorizontalDivider()
+            RemoteDownloadPane(
+                running = remoteRunning,
+                status = remoteStatus,
+                error = remoteError,
+                policy = remotePolicy,
+                onPolicyChange = { policy ->
+                    remotePolicy = policy
+                    AppPreferences.saveRemoteNetworkPolicy(context, policy)
+                },
+                onStart = ::startRemoteDownloads,
+                onStop = ::stopRemoteDownloads,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 18.dp),
+            )
         }
     }
 }
@@ -511,6 +609,145 @@ private fun AccessPane(
                 Text("在本机浏览器预览")
             }
         }
+    }
+}
+
+@Composable
+private fun RemoteDownloadPane(
+    running: Boolean,
+    status: String,
+    error: Boolean,
+    policy: RemoteNetworkPolicy,
+    onPolicyChange: (RemoteNetworkPolicy) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val dashboardUrl = "${RemoteDownloadApi.BASE_URL}/admin/offline-download"
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                SectionTitle("远程离线下载")
+                Text(
+                    "手机直接从链接下载到当前共享文件夹",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .background(
+                        when {
+                            error -> MaterialTheme.colorScheme.error
+                            running -> Color(0xFF16A34A)
+                            else -> MaterialTheme.colorScheme.outline
+                        },
+                        CircleShape,
+                    ),
+            )
+        }
+
+        Text(
+            status,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (error) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+
+        Text(
+            "计费网络",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
+        RemotePolicyOption(
+            selected = policy == RemoteNetworkPolicy.UNMETERED_ONLY,
+            text = "仅使用非计费网络",
+            onClick = { onPolicyChange(RemoteNetworkPolicy.UNMETERED_ONLY) },
+        )
+        RemotePolicyOption(
+            selected = policy == RemoteNetworkPolicy.ASK,
+            text = "使用前询问（推荐）",
+            onClick = { onPolicyChange(RemoteNetworkPolicy.ASK) },
+        )
+        RemotePolicyOption(
+            selected = policy == RemoteNetworkPolicy.ALWAYS,
+            text = "始终允许",
+            onClick = { onPolicyChange(RemoteNetworkPolicy.ALWAYS) },
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedButton(
+                onClick = { openUrl(context, dashboardUrl) },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("打开控制页")
+            }
+            if (running) {
+                Button(
+                    onClick = onStop,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    Text("停止远程下载")
+                }
+            } else {
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("启用远程下载")
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                dashboardUrl,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { copyText(context, dashboardUrl) }) {
+                Text("复制")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemotePolicyOption(
+    selected: Boolean,
+    text: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+        )
+        Text(text, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

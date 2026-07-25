@@ -19,6 +19,7 @@ jobs:
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      REMOTE_DEVICE_TOKEN: ${{ secrets.REMOTE_DEVICE_TOKEN }}
 
     steps:
       - name: Check out source
@@ -54,6 +55,7 @@ jobs:
 
       - name: Test, lint and build release APK
         run: |
+          test -n "$REMOTE_DEVICE_TOKEN"
           chmod +x gradlew
           ./gradlew testDebugUnitTest lintDebug assembleRelease \
             --no-daemon \

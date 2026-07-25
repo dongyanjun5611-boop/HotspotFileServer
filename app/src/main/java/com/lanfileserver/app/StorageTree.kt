@@ -6,6 +6,7 @@ import androidx.documentfile.provider.DocumentFile
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.net.URLConnection
 import java.util.Locale
 
@@ -139,6 +140,40 @@ class StorageTree(
             name = finalName,
             path = SafePath.join(normalizedParent, finalName),
             size = contentLength,
+        )
+    }
+
+    fun writeRootFile(
+        requestedName: String,
+        mimeType: String,
+        writer: (OutputStream) -> Long,
+    ): UploadResult {
+        val safeName = SafePath.sanitizeName(requestedName)
+        val safeMimeType = mimeType.ifBlank { mimeTypeFor(safeName) }
+        val (document, actualName) = synchronized(mutationLock) {
+            if (!root.canWrite()) throw SecurityException("共享文件夹不可写")
+            val availableName = uniqueName(root, safeName)
+            val created = root.createFile(safeMimeType, availableName)
+                ?: throw IOException("无法创建下载文件")
+            created to availableName
+        }
+
+        val size = try {
+            val output = context.contentResolver.openOutputStream(document.uri, "w")
+                ?: throw IOException("无法写入下载文件")
+            output.use { destination ->
+                writer(destination).also { destination.flush() }
+            }
+        } catch (error: Throwable) {
+            runCatching { document.delete() }
+            throw error
+        }
+
+        val finalName = document.name ?: actualName
+        return UploadResult(
+            name = finalName,
+            path = finalName,
+            size = size,
         )
     }
 

@@ -505,7 +505,7 @@
     }
 
     function renderBreadcrumbs() {
-      breadcrumbs.replaceChildren();
+      breadcrumbs.textContent = "";
       const root = crumbButton(rootName, "", currentPath === "", true);
       breadcrumbs.append(root);
 
@@ -538,7 +538,7 @@
     }
 
     function renderFiles(items) {
-      fileList.replaceChildren();
+      fileList.textContent = "";
       if (!items.length) {
         const empty = document.createElement("div");
         empty.className = "empty";

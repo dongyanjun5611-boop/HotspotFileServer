@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>热点文件站兼容版</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #172033;
+      background: #eef3f5;
+      font: 15px/1.5 Arial, sans-serif;
+    }
+    header {
+      padding: 14px 16px;
+      border-bottom: 1px solid #bcc9d3;
+      color: #fff;
+      background: #126b65;
+    }
+    header strong { font-size: 19px; }
+    header form { float: right; margin: 0; }
+    header button {
+      padding: 6px 10px;
+      border: 1px solid #fff;
+      border-radius: 3px;
+      color: #fff;
+      background: transparent;
+    }
+    main { max-width: 980px; margin: 0 auto; padding: 16px; }
+    .path {
+      margin-bottom: 12px;
+      padding: 9px 11px;
+      border: 1px solid #c4d0d9;
+      background: #fff;
+      word-break: break-all;
+    }
+    .button, button {
+      display: inline-block;
+      padding: 7px 10px;
+      border: 1px solid #9facb8;
+      border-radius: 3px;
+      color: #172033;
+      background: #fff;
+      text-decoration: none;
+    }
+    .path .button { float: right; margin: -5px -6px 0 8px; }
+    .notice {
+      padding: 9px 11px;
+      border: 1px solid #8bbcb6;
+      color: #075a53;
+      background: #e5f7f4;
+    }
+    .tools {
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid #c4d0d9;
+      background: #fff;
+    }
+    .tools form { display: inline-block; margin: 4px 16px 4px 0; }
+    .tools label { font-weight: bold; }
+    .tools input { max-width: 210px; padding: 7px; border: 1px solid #aebbc7; }
+    .tools button { background: #f7f9fa; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+    }
+    th, td {
+      padding: 10px;
+      border: 1px solid #c4d0d9;
+      text-align: left;
+      vertical-align: middle;
+    }
+    th { color: #4e5d6e; background: #e5ebef; }
+    .item { color: #075f58; font-weight: bold; text-decoration: none; word-break: break-all; }
+    .folder { color: #8a4b08; }
+    .meta { margin-top: 3px; color: #677486; font-size: 12px; }
+    .rename { white-space: nowrap; }
+    .rename-input {
+      width: 150px;
+      max-width: 62%;
+      padding: 7px;
+      border: 1px solid #aebbc7;
+    }
+    .rename button { padding: 7px; }
+    .actions { width: 54px; text-align: center; }
+    .danger { color: #a1261d; }
+    .empty { padding: 34px; color: #677486; text-align: center; }
+    @media (max-width: 640px) {
+      body { font-size: 14px; }
+      main { padding: 9px; }
+      header { padding: 12px 10px; }
+      th:nth-child(2), td:nth-child(2) { display: none; }
+      .tools form { display: block; margin-right: 0; }
+      .tools input[type="file"] { max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>{{ROOT_NAME}}</strong>
+    <form method="post" action="/lite/logout">
+      <input type="hidden" name="csrf" value="{{CSRF_TOKEN}}">
+      <button type="submit">退出</button>
+    </form>
+  </header>
+  <main>
+    {{NOTICE_BLOCK}}
+    <div class="path">
+      当前目录：{{CURRENT_PATH}}
+      {{PARENT_LINK}}
+    </div>
+    <div class="tools">
+      <form method="post" action="/lite/upload" enctype="multipart/form-data" accept-charset="UTF-8">
+        <input type="hidden" name="csrf" value="{{CSRF_TOKEN}}">
+        <input type="hidden" name="path" value="{{ENCODED_PATH}}">
+        <label for="file">上传：</label>
+        <input id="file" name="file" type="file">
+        <button type="submit">上传文件</button>
+      </form>
+      <form method="post" action="/lite/mkdir" accept-charset="UTF-8">
+        <input type="hidden" name="csrf" value="{{CSRF_TOKEN}}">
+        <input type="hidden" name="path" value="{{ENCODED_PATH}}">
+        <label for="folder">新建：</label>
+        <input id="folder" name="name" type="text" maxlength="180">
+        <button type="submit">新建文件夹</button>
+      </form>
+    </div>
+    <table>
+      <thead>
+        <tr><th>名称</th><th>重命名</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+        {{ROWS}}
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>

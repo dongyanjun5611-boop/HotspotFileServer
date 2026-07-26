@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>确认删除 - 热点文件站</title>
+  <style>
+    body {
+      margin: 24px;
+      color: #172033;
+      background: #eef3f5;
+      font: 16px/1.6 Arial, sans-serif;
+    }
+    main {
+      max-width: 520px;
+      margin: 45px auto;
+      padding: 22px;
+      border: 1px solid #c4d0d9;
+      background: #fff;
+    }
+    .name { padding: 9px; background: #f2f5f7; word-break: break-all; }
+    button, a {
+      display: inline-block;
+      margin-right: 8px;
+      padding: 8px 12px;
+      border: 1px solid #aebbc7;
+      border-radius: 3px;
+      color: #172033;
+      background: #fff;
+      font: inherit;
+      text-decoration: none;
+    }
+    button { border-color: #a1261d; color: #fff; background: #a1261d; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>确认删除</h1>
+    <p>即将删除以下文件或文件夹，此操作无法撤销：</p>
+    <p class="name">{{ITEM_NAME}}</p>
+    <form method="post" action="/lite/delete" accept-charset="UTF-8">
+      <input type="hidden" name="csrf" value="{{CSRF_TOKEN}}">
+      <input type="hidden" name="path" value="{{ITEM_PATH}}">
+      <input type="hidden" name="returnPath" value="{{RETURN_PATH}}">
+      <button type="submit">确认删除</button>
+      <a href="/lite?path={{RETURN_URL}}">取消</a>
+    </form>
+  </main>
+</body>
+</html>

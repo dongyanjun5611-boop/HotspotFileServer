@@ -112,6 +112,13 @@
       color: var(--error);
       font-size: 13px;
     }
+    .lite-link {
+      display: block;
+      margin-top: 14px;
+      color: var(--primary);
+      font-size: 13px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -132,6 +139,7 @@
       <button id="submit" type="submit">进入文件站</button>
       <div id="error" class="error" role="alert"></div>
     </form>
+    <a class="lite-link" href="/lite">旧版浏览器兼容入口</a>
   </main>
   <script>
     const form = document.getElementById("loginForm");
@@ -166,4 +174,3 @@
   </script>
 </body>
 </html>
-

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 - 热点文件站兼容版</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      color: #172033;
+      background: #eef3f5;
+      font: 16px/1.5 Arial, sans-serif;
+    }
+    main {
+      width: 100%;
+      max-width: 380px;
+      margin: 44px auto;
+      padding: 24px;
+      border: 1px solid #c8d3dc;
+      background: #fff;
+    }
+    h1 { margin: 0 0 5px; font-size: 25px; }
+    .sub { margin: 0 0 22px; color: #596779; }
+    label { display: block; margin-bottom: 6px; font-weight: bold; }
+    input, button {
+      width: 100%;
+      height: 46px;
+      border: 1px solid #aebbc7;
+      border-radius: 4px;
+      font: inherit;
+    }
+    input { padding: 0 10px; font-size: 19px; }
+    button {
+      margin-top: 13px;
+      border-color: #0f766e;
+      color: #fff;
+      background: #0f766e;
+      font-weight: bold;
+    }
+    .error {
+      margin: 13px 0 0;
+      padding: 9px;
+      border: 1px solid #d9a09b;
+      color: #a1261d;
+      background: #fff1f0;
+    }
+    .modern { margin: 20px 0 0; font-size: 13px; }
+    a { color: #086c64; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>热点文件站</h1>
+    <p class="sub">旧版浏览器兼容登录</p>
+    <form method="post" action="/lite/login" accept-charset="UTF-8">
+      <label for="pin">访问码</label>
+      <input id="pin" name="pin" type="text" maxlength="12" autocomplete="off" autofocus>
+      <button type="submit">进入文件站</button>
+    </form>
+    {{ERROR_BLOCK}}
+    <p class="modern"><a href="/">返回标准页面</a></p>
+  </main>
+</body>
+</html>

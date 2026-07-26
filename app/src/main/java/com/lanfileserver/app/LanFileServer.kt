@@ -7,6 +7,8 @@ import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
@@ -14,6 +16,9 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.HashMap
 import java.util.Locale
 
 class LanFileServer(
@@ -25,7 +30,15 @@ class LanFileServer(
     private val storage = StorageTree(context, treeUri)
     private val indexHtml = context.assets.open("web/index.html").bufferedReader().use { it.readText() }
     private val loginHtml = context.assets.open("web/login.html").bufferedReader().use { it.readText() }
+    private val liteHtml = context.assets.open("web/lite.html").bufferedReader().use { it.readText() }
+    private val liteLoginHtml =
+        context.assets.open("web/lite-login.html").bufferedReader().use { it.readText() }
+    private val liteDeleteHtml =
+        context.assets.open("web/lite-delete.html").bufferedReader().use { it.readText() }
     private val sessionToken = ByteArray(32).also(SecureRandom()::nextBytes).let {
+        Base64.encodeToString(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+    }
+    private val legacyCsrfToken = ByteArray(24).also(SecureRandom()::nextBytes).let {
         Base64.encodeToString(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
     private val loginLock = Any()
@@ -41,10 +54,13 @@ class LanFileServer(
                 }
 
                 uri == "/login" && session.method == Method.POST -> login(session)
+                uri == "/lite" || uri.startsWith("/lite/") -> serveLite(session, uri)
 
                 !authenticated(session) -> {
                     if (uri.startsWith("/api/")) {
                         jsonError(Response.Status.UNAUTHORIZED, "请先登录")
+                    } else if (uri == "/" && prefersLegacyBrowser(session)) {
+                        redirect("/lite")
                     } else {
                         html(Response.Status.OK, loginHtml)
                     }
@@ -64,32 +80,45 @@ class LanFileServer(
                 else -> jsonError(Response.Status.NOT_FOUND, "页面或接口不存在")
             }
         } catch (error: HttpFailure) {
-            jsonError(error.status, error.message ?: "请求失败")
+            failure(session, error.status, error.message ?: "请求失败")
         } catch (error: AlreadyExistsException) {
-            jsonError(Response.Status.CONFLICT, error.message ?: "目标已存在")
+            failure(session, Response.Status.CONFLICT, error.message ?: "目标已存在")
         } catch (error: FileNotFoundException) {
-            jsonError(Response.Status.NOT_FOUND, error.message ?: "目标不存在")
+            failure(session, Response.Status.NOT_FOUND, error.message ?: "目标不存在")
         } catch (error: SecurityException) {
-            jsonError(Response.Status.FORBIDDEN, error.message ?: "没有访问权限")
+            failure(session, Response.Status.FORBIDDEN, error.message ?: "没有访问权限")
         } catch (error: IllegalArgumentException) {
-            jsonError(Response.Status.BAD_REQUEST, error.message ?: "请求参数无效")
+            failure(session, Response.Status.BAD_REQUEST, error.message ?: "请求参数无效")
         } catch (error: IOException) {
-            jsonError(Response.Status.INTERNAL_ERROR, error.message ?: "文件操作失败")
+            failure(session, Response.Status.INTERNAL_ERROR, error.message ?: "文件操作失败")
         } catch (_: Throwable) {
-            jsonError(Response.Status.INTERNAL_ERROR, "服务器内部错误")
+            failure(session, Response.Status.INTERNAL_ERROR, "服务器内部错误")
         }
     }
 
     private fun login(session: IHTTPSession): Response {
+        val supplied = readRequestBody(session, 64).trim()
+        val error = authenticatePin(supplied)
+        if (error != null) return jsonError(error.first, error.second)
+
+        return secure(newFixedLengthResponse(Response.Status.NO_CONTENT, MIME_PLAINTEXT, "")).apply {
+            addHeader(
+                "Set-Cookie",
+                "$COOKIE_NAME=$sessionToken; Path=/; HttpOnly; SameSite=Strict",
+            )
+        }
+    }
+
+    private fun authenticatePin(supplied: String): Pair<Response.IStatus, String>? {
         val now = System.currentTimeMillis()
         synchronized(loginLock) {
             if (now < blockedUntil) {
                 val waitSeconds = ((blockedUntil - now) / 1_000L).coerceAtLeast(1L)
-                return jsonError(Response.Status.TOO_MANY_REQUESTS, "尝试次数过多，请在 ${waitSeconds} 秒后重试")
+                return Response.Status.TOO_MANY_REQUESTS to
+                    "尝试次数过多，请在 ${waitSeconds} 秒后重试"
             }
         }
 
-        val supplied = readRequestBody(session, 64).trim()
         val matches = MessageDigest.isEqual(
             supplied.toByteArray(StandardCharsets.UTF_8),
             accessPin.toByteArray(StandardCharsets.UTF_8),
@@ -102,19 +131,14 @@ class LanFileServer(
                     failedLogins = 0
                 }
             }
-            return jsonError(Response.Status.UNAUTHORIZED, "访问码不正确")
+            return Response.Status.UNAUTHORIZED to "访问码不正确"
         }
 
         synchronized(loginLock) {
             failedLogins = 0
             blockedUntil = 0L
         }
-        return secure(newFixedLengthResponse(Response.Status.NO_CONTENT, MIME_PLAINTEXT, "")).apply {
-            addHeader(
-                "Set-Cookie",
-                "$COOKIE_NAME=$sessionToken; Path=/; HttpOnly; SameSite=Strict",
-            )
-        }
+        return null
     }
 
     private fun logout(): Response =
@@ -123,6 +147,244 @@ class LanFileServer(
                 "Set-Cookie",
                 "$COOKIE_NAME=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Strict",
             )
+        }
+
+    private fun serveLite(session: IHTTPSession, uri: String): Response {
+        if (uri == "/lite/login" && session.method == Method.POST) {
+            parseFormBody(session)
+            val supplied = formParameter(session, "pin").trim()
+            val error = authenticatePin(supplied)
+            if (error != null) return liteLogin(error.first, error.second)
+
+            return redirect("/lite").apply {
+                addHeader(
+                    "Set-Cookie",
+                    "$LEGACY_COOKIE_NAME=$sessionToken; Path=/; HttpOnly",
+                )
+            }
+        }
+
+        if (!legacyAuthenticated(session)) {
+            return liteLogin(Response.Status.OK, "")
+        }
+
+        return when {
+            uri == "/lite" && session.method == Method.GET -> liteIndex(session)
+            uri == "/lite/download" &&
+                (session.method == Method.GET || session.method == Method.HEAD) -> download(session)
+
+            uri == "/lite/upload" && session.method == Method.POST -> liteUpload(session)
+            uri == "/lite/mkdir" && session.method == Method.POST -> liteMkdir(session)
+            uri == "/lite/rename" && session.method == Method.POST -> liteRename(session)
+            uri == "/lite/delete" && session.method == Method.GET -> liteDeleteConfirmation(session)
+            uri == "/lite/delete" && session.method == Method.POST -> liteDelete(session)
+            uri == "/lite/logout" && session.method == Method.POST -> liteLogout(session)
+            else -> liteFailure(Response.Status.NOT_FOUND, "页面不存在")
+        }
+    }
+
+    private fun liteLogin(status: Response.IStatus, error: String): Response {
+        val errorBlock = if (error.isBlank()) {
+            ""
+        } else {
+            """<p class="error" role="alert">${escapeHtml(error)}</p>"""
+        }
+        return html(status, liteLoginHtml.replace("{{ERROR_BLOCK}}", errorBlock))
+    }
+
+    private fun liteIndex(session: IHTTPSession): Response {
+        val currentPath = SafePath.normalize(parameter(session, "path", required = false))
+        val entries = storage.list(currentPath)
+        val notice = parameter(session, "notice", required = false)
+        val parent = SafePath.parent(currentPath)
+        val parentLink = if (currentPath.isEmpty()) {
+            ""
+        } else {
+            """<a class="button" href="/lite?path=${url(parent)}">返回上一级</a>"""
+        }
+        val rows = if (entries.isEmpty()) {
+            """<tr><td class="empty" colspan="3">这个文件夹是空的</td></tr>"""
+        } else {
+            entries.joinToString("\n", transform = ::liteRow)
+        }
+        val noticeBlock = if (notice.isBlank()) {
+            ""
+        } else {
+            """<p class="notice">${escapeHtml(notice)}</p>"""
+        }
+
+        val body = liteHtml
+            .replace("{{ROOT_NAME}}", escapeHtml(storage.displayName))
+            .replace(
+                "{{CURRENT_PATH}}",
+                escapeHtml(if (currentPath.isEmpty()) "/" else "/$currentPath"),
+            )
+            .replace("{{ENCODED_PATH}}", escapeHtml(currentPath))
+            .replace("{{PARENT_LINK}}", parentLink)
+            .replace("{{NOTICE_BLOCK}}", noticeBlock)
+            .replace("{{ROWS}}", rows)
+            .replace("{{CSRF_TOKEN}}", escapeHtml(legacyCsrfToken))
+        return html(Response.Status.OK, body)
+    }
+
+    private fun liteRow(entry: StorageTree.Entry): String {
+        val path = url(entry.path)
+        val name = escapeHtml(entry.name)
+        val itemLink = if (entry.directory) {
+            """<a class="item folder" href="/lite?path=$path">[文件夹] $name</a>"""
+        } else {
+            """<a class="item" href="/lite/download?path=$path">$name</a>"""
+        }
+        val detail = if (entry.directory) {
+            "文件夹"
+        } else {
+            formatLiteSize(entry.size)
+        }
+        val modified = if (entry.modifiedAt > 0L) {
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(entry.modifiedAt))
+        } else {
+            "-"
+        }
+        return """
+            <tr>
+              <td>$itemLink<div class="meta">${escapeHtml(detail)} · ${escapeHtml(modified)}</div></td>
+              <td>
+                <form class="rename" method="post" action="/lite/rename" accept-charset="UTF-8">
+                  <input type="hidden" name="csrf" value="${escapeHtml(legacyCsrfToken)}">
+                  <input type="hidden" name="path" value="${escapeHtml(entry.path)}">
+                  <input type="hidden" name="returnPath" value="${escapeHtml(SafePath.parent(entry.path))}">
+                  <input class="rename-input" type="text" name="name" value="$name" maxlength="180">
+                  <button type="submit">重命名</button>
+                </form>
+              </td>
+              <td class="actions">
+                <a class="danger" href="/lite/delete?path=$path&amp;returnPath=${url(SafePath.parent(entry.path))}">删除</a>
+              </td>
+            </tr>
+        """.trimIndent()
+    }
+
+    private fun liteUpload(session: IHTTPSession): Response {
+        val files = parseFormBody(session)
+        requireLiteCsrf(session)
+        val parentPath = SafePath.normalize(formParameter(session, "path", required = false))
+        val temporaryPath = files["file"]
+            ?: throw HttpFailure(Response.Status.BAD_REQUEST, "请选择要上传的文件")
+        val requestedName = formParameter(session, "file")
+        val temporaryFile = File(temporaryPath)
+        if (!temporaryFile.isFile) {
+            throw HttpFailure(Response.Status.BAD_REQUEST, "没有收到上传文件")
+        }
+
+        val result = FileInputStream(temporaryFile).use { input ->
+            storage.upload(parentPath, requestedName, input, temporaryFile.length())
+        }
+        return redirectLite(parentPath, "已上传 ${result.name}")
+    }
+
+    private fun liteMkdir(session: IHTTPSession): Response {
+        parseFormBody(session)
+        requireLiteCsrf(session)
+        val parentPath = SafePath.normalize(formParameter(session, "path", required = false))
+        val entry = storage.createDirectory(parentPath, formParameter(session, "name"))
+        return redirectLite(parentPath, "已创建 ${entry.name}")
+    }
+
+    private fun liteRename(session: IHTTPSession): Response {
+        parseFormBody(session)
+        requireLiteCsrf(session)
+        val returnPath = SafePath.normalize(
+            formParameter(session, "returnPath", required = false),
+        )
+        val entry = storage.rename(
+            formParameter(session, "path"),
+            formParameter(session, "name"),
+        )
+        return redirectLite(returnPath, "已重命名为 ${entry.name}")
+    }
+
+    private fun liteDeleteConfirmation(session: IHTTPSession): Response {
+        val path = SafePath.normalize(parameter(session, "path"))
+        if (path.isEmpty()) throw IllegalArgumentException("不能删除共享根目录")
+        val returnPath = SafePath.normalize(
+            parameter(session, "returnPath", required = false),
+        )
+        val name = SafePath.segments(path).last()
+        val body = liteDeleteHtml
+            .replace("{{ITEM_NAME}}", escapeHtml(name))
+            .replace("{{ITEM_PATH}}", escapeHtml(path))
+            .replace("{{RETURN_PATH}}", escapeHtml(returnPath))
+            .replace("{{RETURN_URL}}", url(returnPath))
+            .replace("{{CSRF_TOKEN}}", escapeHtml(legacyCsrfToken))
+        return html(Response.Status.OK, body)
+    }
+
+    private fun liteDelete(session: IHTTPSession): Response {
+        parseFormBody(session)
+        requireLiteCsrf(session)
+        val path = formParameter(session, "path")
+        val returnPath = SafePath.normalize(
+            formParameter(session, "returnPath", required = false),
+        )
+        storage.delete(path)
+        return redirectLite(returnPath, "已删除")
+    }
+
+    private fun liteLogout(session: IHTTPSession): Response {
+        parseFormBody(session)
+        requireLiteCsrf(session)
+        return redirect("/lite").apply {
+            addHeader(
+                "Set-Cookie",
+                "$LEGACY_COOKIE_NAME=deleted; Path=/; Max-Age=0; HttpOnly",
+            )
+        }
+    }
+
+    private fun parseFormBody(session: IHTTPSession): Map<String, String> {
+        val contentLength = session.headers["content-length"]?.toLongOrNull()
+            ?: throw HttpFailure(Response.Status.LENGTH_REQUIRED, "请求缺少内容长度")
+        if (contentLength < 0L) {
+            throw HttpFailure(Response.Status.BAD_REQUEST, "请求大小无效")
+        }
+        val files = HashMap<String, String>()
+        try {
+            session.parseBody(files)
+        } catch (error: ResponseException) {
+            throw HttpFailure(error.status, error.message ?: "表单内容无效")
+        }
+        return files
+    }
+
+    private fun formParameter(
+        session: IHTTPSession,
+        name: String,
+        required: Boolean = true,
+    ): String {
+        val value = session.parameters[name]?.firstOrNull()
+        if (required && value.isNullOrBlank()) {
+            throw HttpFailure(Response.Status.BAD_REQUEST, "缺少参数：$name")
+        }
+        return value.orEmpty()
+    }
+
+    private fun requireLiteCsrf(session: IHTTPSession) {
+        val supplied = formParameter(session, "csrf")
+        if (!MessageDigest.isEqual(
+                supplied.toByteArray(StandardCharsets.UTF_8),
+                legacyCsrfToken.toByteArray(StandardCharsets.UTF_8),
+            )
+        ) {
+            throw HttpFailure(Response.Status.FORBIDDEN, "页面已失效，请返回后重试")
+        }
+    }
+
+    private fun redirectLite(path: String, notice: String): Response =
+        redirect("/lite?path=${url(path)}&notice=${url(notice)}")
+
+    private fun redirect(location: String): Response =
+        secure(newFixedLengthResponse(SEE_OTHER, MIME_PLAINTEXT, "")).apply {
+            addHeader("Location", location)
         }
 
     private fun info(): Response {
@@ -246,16 +508,32 @@ class LanFileServer(
     }
 
     private fun authenticated(session: IHTTPSession): Boolean {
+        return cookieMatches(session, COOKIE_NAME)
+    }
+
+    private fun legacyAuthenticated(session: IHTTPSession): Boolean =
+        cookieMatches(session, LEGACY_COOKIE_NAME) || authenticated(session)
+
+    private fun cookieMatches(session: IHTTPSession, name: String): Boolean {
         val cookie = session.headers["cookie"] ?: return false
         val supplied = cookie.split(';')
             .map { it.trim() }
-            .firstOrNull { it.startsWith("$COOKIE_NAME=") }
+            .firstOrNull { it.startsWith("$name=") }
             ?.substringAfter('=')
             ?: return false
         return MessageDigest.isEqual(
             supplied.toByteArray(StandardCharsets.UTF_8),
             sessionToken.toByteArray(StandardCharsets.UTF_8),
         )
+    }
+
+    private fun prefersLegacyBrowser(session: IHTTPSession): Boolean {
+        val userAgent = session.headers["user-agent"].orEmpty()
+        val major = ANDROID_VERSION.find(userAgent)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        return major != null && major <= 5
     }
 
     private fun readRequestBody(session: IHTTPSession, maxBytes: Int): String {
@@ -343,6 +621,68 @@ class LanFileServer(
     private fun jsonError(status: Response.IStatus, message: String): Response =
         json(status, JSONObject().put("error", message))
 
+    private fun failure(
+        session: IHTTPSession,
+        status: Response.IStatus,
+        message: String,
+    ): Response = if (session.uri == "/lite" || session.uri.startsWith("/lite/")) {
+        liteFailure(status, message)
+    } else {
+        jsonError(status, message)
+    }
+
+    private fun liteFailure(status: Response.IStatus, message: String): Response =
+        html(
+            status,
+            """
+                <!doctype html>
+                <html lang="zh-CN">
+                <head>
+                  <meta charset="utf-8">
+                  <meta name="viewport" content="width=device-width,initial-scale=1">
+                  <title>请求失败 - 热点文件站</title>
+                  <style>
+                    body { margin: 24px; color: #172033; background: #f1f5f7;
+                      font: 16px/1.6 Arial, sans-serif; }
+                    main { max-width: 520px; margin: 40px auto; padding: 22px;
+                      border: 1px solid #ccd6df; background: #fff; }
+                    a { color: #086c64; }
+                  </style>
+                </head>
+                <body><main>
+                  <h1>操作没有完成</h1>
+                  <p>${escapeHtml(message)}</p>
+                  <p><a href="/lite">返回兼容文件页</a></p>
+                </main></body>
+                </html>
+            """.trimIndent(),
+        )
+
+    private fun escapeHtml(value: String): String = buildString(value.length) {
+        value.forEach { char ->
+            when (char) {
+                '&' -> append("&amp;")
+                '<' -> append("&lt;")
+                '>' -> append("&gt;")
+                '"' -> append("&quot;")
+                '\'' -> append("&#39;")
+                else -> append(char)
+            }
+        }
+    }
+
+    private fun url(value: String): String =
+        URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
+
+    private fun formatLiteSize(bytes: Long): String = when {
+        bytes < 1024L -> "$bytes B"
+        bytes < 1024L * 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        bytes < 1024L * 1024L * 1024L ->
+            String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+
+        else -> String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    }
+
     private fun secure(response: Response): Response = response.apply {
         addHeader("Cache-Control", "no-store")
         addHeader("X-Content-Type-Options", "nosniff")
@@ -383,6 +723,13 @@ class LanFileServer(
 
     companion object {
         private const val COOKIE_NAME = "LanFileSession"
+        private const val LEGACY_COOKIE_NAME = "LanFileLegacySession"
         private val RANGE_PATTERN = Regex("""bytes=(\d*)-(\d*)""", RegexOption.IGNORE_CASE)
+        private val ANDROID_VERSION =
+            Regex("""Android\s+(\d+)(?:[.;\s]|$)""", RegexOption.IGNORE_CASE)
+        private val SEE_OTHER = object : Response.IStatus {
+            override fun getRequestStatus(): Int = 303
+            override fun getDescription(): String = "303 See Other"
+        }
     }
 }

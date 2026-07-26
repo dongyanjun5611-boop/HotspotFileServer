@@ -31,6 +31,7 @@ object NetworkAddresses {
         }
 
         return addresses
+            .filter { it.first >= 0 }
             .sortedWith(compareByDescending<Pair<Int, String>> { it.first }.thenBy { it.second })
             .map { it.second }
             .distinct()
@@ -42,8 +43,15 @@ object NetworkAddresses {
         if (name.startsWith("ap") || name.contains("wlan") || name.contains("wifi")) score += 50
         if (name.contains("eth")) score += 35
         if (name.contains("p2p")) score -= 30
-        if (name.contains("tun") || name.contains("vpn") || name.contains("rmnet")) score -= 60
+        if (name.contains("tun") ||
+            name.contains("vpn") ||
+            name.contains("rmnet") ||
+            name.contains("ccmni") ||
+            name.contains("wwan") ||
+            name.startsWith("pdp")
+        ) {
+            score -= 60
+        }
         return score
     }
 }
-

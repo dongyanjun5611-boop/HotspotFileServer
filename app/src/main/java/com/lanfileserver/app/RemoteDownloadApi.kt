@@ -1,5 +1,6 @@
 package com.lanfileserver.app
 
+import android.content.Context
 import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,19 +46,19 @@ class RemoteDownloadApi {
         )
     }
 
-    fun poll(credentials: RemoteDeviceCredentials): List<RemoteDownloadJob> {
-        val platform = URLEncoder.encode(
-            platformDescription(),
-            StandardCharsets.UTF_8.name(),
-        )
-        val appVersion = URLEncoder.encode(
-            BuildConfig.VERSION_NAME,
-            StandardCharsets.UTF_8.name(),
-        )
+    fun poll(
+        context: Context,
+        credentials: RemoteDeviceCredentials,
+    ): List<RemoteDownloadJob> {
+        val status = DeviceLanStatusReader.read(context)
         val response = request(
-            method = "GET",
-            path = "/api/offline-download/device/poll" +
-                "?platform=$platform&appVersion=$appVersion",
+            method = "POST",
+            path = "/api/offline-download/device/poll",
+            body = JSONObject()
+                .put("networkName", status.networkName)
+                .put("lanUrl", status.lanUrl)
+                .put("lanAccessCode", status.lanAccessCode)
+                .put("lanServerRunning", status.lanServerRunning),
             token = credentials.token,
         )
         val jobs = response.optJSONArray("jobs") ?: JSONArray()

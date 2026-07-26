@@ -132,6 +132,23 @@ private fun ServerControlScreen() {
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
+    val networkNamePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { }
+
+    LaunchedEffect(selectedTab, remoteDevice?.id) {
+        if (selectedTab == AppTab.REMOTE &&
+            remoteDevice != null &&
+            !DeviceLanStatusReader.hasNetworkNamePermission(context)
+        ) {
+            networkNamePermission.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                ),
+            )
+        }
+    }
 
     DisposableEffect(context) {
         val receiver = object : BroadcastReceiver() {

@@ -19,6 +19,7 @@ object AppPreferences {
     private const val KEY_REMOTE_DEVICE_ID = "remote_device_id"
     private const val KEY_REMOTE_DEVICE_NAME = "remote_device_name"
     private const val KEY_REMOTE_DEVICE_TOKEN = "remote_device_token"
+    private const val KEY_LAST_NETWORK_NAME = "last_network_name"
     private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
 
     const val DEFAULT_PORT = 8080
@@ -153,6 +154,13 @@ object AppPreferences {
             remove(KEY_APPROVED_METERED_JOB)
             remove(KEY_PENDING_CANCELED_JOB)
         }
+    }
+
+    fun lastNetworkName(context: Context): String? =
+        prefs(context).getString(KEY_LAST_NETWORK_NAME, null)
+
+    fun saveLastNetworkName(context: Context, name: String) {
+        prefs(context).edit { putString(KEY_LAST_NETWORK_NAME, name) }
     }
 
     fun lastUpdateCheck(context: Context): Long =

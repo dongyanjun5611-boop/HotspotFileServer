@@ -110,7 +110,7 @@ class RemoteDownloadService : Service() {
                     continue
                 }
 
-                val job = api.poll(credentials).firstOrNull()
+                val job = api.poll(this, credentials).firstOrNull()
                 if (job == null) {
                     currentJobId = null
                     cancelCurrent.set(false)

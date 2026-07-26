@@ -174,9 +174,7 @@ fun AppUpdateSection() {
     var error by remember { mutableStateOf(UpdateDownloadService.lastError) }
     var progress by remember { mutableStateOf(UpdateDownloadService.progressPercent) }
     var downloading by remember { mutableStateOf(UpdateDownloadService.running) }
-    var readyFile by remember {
-        mutableStateOf(UpdateInstaller.readyApk(context).takeIf(File::isFile))
-    }
+    var readyFile by remember { mutableStateOf<File?>(null) }
 
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -193,6 +191,10 @@ fun AppUpdateSection() {
             }.onSuccess { available ->
                 AppPreferences.markUpdateChecked(context)
                 update = available
+                UpdateInstaller.discardStaleReadyApks(context, available?.versionCode)
+                readyFile = available?.let { info ->
+                    UpdateInstaller.validatedReadyApk(context, info.versionCode)
+                }
                 status = if (available == null) {
                     "当前已是最新版本 ${BuildConfig.VERSION_NAME}"
                 } else {
@@ -219,7 +221,9 @@ fun AppUpdateSection() {
                 val reported = intent?.getIntExtra(UpdateDownloadService.EXTRA_PROGRESS, -1)
                     ?: -1
                 progress = reported.takeIf { it >= 0 }
-                readyFile = UpdateInstaller.readyApk(context).takeIf(File::isFile)
+                readyFile = update?.let { info ->
+                    UpdateInstaller.validatedReadyApk(context, info.versionCode)
+                }
             }
         }
         ContextCompat.registerReceiver(
@@ -310,7 +314,12 @@ fun AppUpdateSection() {
                     Button(
                         onClick = {
                             runCatching {
-                                UpdateInstaller.openInstaller(context, requireNotNull(readyFile))
+                                val info = requireNotNull(update)
+                                UpdateInstaller.openInstaller(
+                                    context,
+                                    requireNotNull(readyFile),
+                                    info.versionCode,
+                                )
                             }.onFailure {
                                 error = true
                                 status = it.message ?: "无法打开安装程序"

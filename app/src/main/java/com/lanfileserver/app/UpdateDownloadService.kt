@@ -72,10 +72,10 @@ class UpdateDownloadService : Service() {
         versionName: String,
     ) {
         val updateDirectory = File(cacheDir, "updates").apply { mkdirs() }
-        val partial = File(updateDirectory, "hotspot-file-server.pending.apk")
-        val ready = UpdateInstaller.readyApk(this)
+        val partial = File(updateDirectory, "hotspot-file-server-$versionCode.pending.apk")
+        val ready = UpdateInstaller.readyApk(this, versionCode)
+        UpdateInstaller.discardStaleReadyApks(this)
         partial.delete()
-        ready.delete()
         var connection: HttpURLConnection? = null
         try {
             val uri = URI(url)
@@ -122,6 +122,7 @@ class UpdateDownloadService : Service() {
                 partial.copyTo(ready, overwrite = true)
                 partial.delete()
             }
+            UpdateInstaller.verifyPackage(this, ready, versionCode)
             readyFilePath = ready.absolutePath
             lastStatus = "更新已下载，点击安装"
             lastError = false

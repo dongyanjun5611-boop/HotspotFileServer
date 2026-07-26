@@ -109,8 +109,31 @@ object AppUpdateChecker {
 }
 
 object UpdateInstaller {
-    fun readyApk(context: Context): File =
-        File(File(context.cacheDir, "updates"), "hotspot-file-server.apk")
+    fun readyApk(context: Context, versionCode: Long): File =
+        File(updateDirectory(context), "hotspot-file-server-$versionCode.apk")
+
+    fun validatedReadyApk(context: Context, expectedVersionCode: Long): File? {
+        val file = readyApk(context, expectedVersionCode)
+        if (!file.isFile) return null
+        return if (runCatching {
+                verifyPackage(context, file, expectedVersionCode)
+            }.isSuccess
+        ) {
+            file
+        } else {
+            file.delete()
+            null
+        }
+    }
+
+    fun discardStaleReadyApks(context: Context, expectedVersionCode: Long? = null) {
+        val keep = expectedVersionCode?.let { validatedReadyApk(context, it) }
+        updateDirectory(context).listFiles()
+            .orEmpty()
+            .filter { file -> file.isFile && file.extension.equals("apk", ignoreCase = true) }
+            .filterNot { file -> keep != null && file == keep }
+            .forEach(File::delete)
+    }
 
     fun openInstallPermission(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
@@ -126,8 +149,9 @@ object UpdateInstaller {
         )
     }
 
-    fun openInstaller(context: Context, file: File = readyApk(context)) {
+    fun openInstaller(context: Context, file: File, expectedVersionCode: Long) {
         require(file.isFile) { "更新文件不存在" }
+        verifyPackage(context, file, expectedVersionCode)
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
@@ -140,6 +164,9 @@ object UpdateInstaller {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
     }
+
+    private fun updateDirectory(context: Context): File =
+        File(context.cacheDir, "updates").apply { mkdirs() }
 
     @Suppress("DEPRECATION")
     fun verifyPackage(context: Context, file: File, expectedVersionCode: Long) {

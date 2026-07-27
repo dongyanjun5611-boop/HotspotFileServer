@@ -3,11 +3,14 @@ package com.lanfileserver.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 
@@ -16,6 +19,8 @@ data class DeviceLanStatus(
     val lanUrl: String,
     val lanAccessCode: String,
     val lanServerRunning: Boolean,
+    val batteryPercent: Int?,
+    val batteryCharging: Boolean,
 )
 
 object DeviceLanStatusReader {
@@ -26,12 +31,33 @@ object DeviceLanStatusReader {
         } else {
             ""
         }
+        val batteryStatus = readBatteryStatus(context)
         return DeviceLanStatus(
             networkName = networkName(context, lanUrl),
             lanUrl = lanUrl,
             lanAccessCode = AppPreferences.pin(context),
             lanServerRunning = serverRunning,
+            batteryPercent = batteryStatus.first,
+            batteryCharging = batteryStatus.second,
         )
+    }
+
+    private fun readBatteryStatus(context: Context): Pair<Int?, Boolean> {
+        val intent = context.registerReceiver(
+            null,
+            IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+        )
+        val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val percent = if (level >= 0 && scale > 0) {
+            ((level * 100) / scale).coerceIn(0, 100)
+        } else {
+            null
+        }
+        val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
+        return percent to charging
     }
 
     fun hasNetworkNamePermission(context: Context): Boolean =

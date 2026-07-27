@@ -58,7 +58,9 @@ class RemoteDownloadApi {
                 .put("networkName", status.networkName)
                 .put("lanUrl", status.lanUrl)
                 .put("lanAccessCode", status.lanAccessCode)
-                .put("lanServerRunning", status.lanServerRunning),
+                .put("lanServerRunning", status.lanServerRunning)
+                .put("batteryPercent", status.batteryPercent ?: JSONObject.NULL)
+                .put("batteryCharging", status.batteryCharging),
             token = credentials.token,
         )
         val jobs = response.optJSONArray("jobs") ?: JSONArray()

@@ -12,6 +12,7 @@ object AppPreferences {
     private const val KEY_REMOTE_ENABLED = "remote_enabled"
     private const val KEY_REMOTE_NETWORK_POLICY = "remote_network_policy"
     private const val KEY_APPROVED_METERED_JOB = "approved_metered_job"
+    private const val KEY_APPROVED_P2P_SESSION = "approved_p2p_session"
     private const val KEY_COMPLETED_JOB = "completed_job"
     private const val KEY_COMPLETED_FILE_NAME = "completed_file_name"
     private const val KEY_COMPLETED_FILE_SIZE = "completed_file_size"
@@ -80,6 +81,19 @@ object AppPreferences {
     fun clearApprovedMeteredJob(context: Context, jobId: String) {
         if (approvedMeteredJob(context) == jobId) {
             prefs(context).edit { remove(KEY_APPROVED_METERED_JOB) }
+        }
+    }
+
+    fun approvedP2pSession(context: Context): String? =
+        prefs(context).getString(KEY_APPROVED_P2P_SESSION, null)
+
+    fun approveP2pSession(context: Context, sessionId: String) {
+        prefs(context).edit { putString(KEY_APPROVED_P2P_SESSION, sessionId) }
+    }
+
+    fun clearApprovedP2pSession(context: Context, sessionId: String) {
+        if (approvedP2pSession(context) == sessionId) {
+            prefs(context).edit { remove(KEY_APPROVED_P2P_SESSION) }
         }
     }
 
@@ -152,6 +166,7 @@ object AppPreferences {
             remove(KEY_REMOTE_DEVICE_TOKEN)
             putBoolean(KEY_REMOTE_ENABLED, false)
             remove(KEY_APPROVED_METERED_JOB)
+            remove(KEY_APPROVED_P2P_SESSION)
             remove(KEY_PENDING_CANCELED_JOB)
         }
     }

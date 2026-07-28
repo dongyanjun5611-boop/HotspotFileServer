@@ -37,10 +37,21 @@ class RemoteDownloadService : Service() {
     private var currentJobId: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val api = RemoteDownloadApi()
+    private lateinit var p2pTransferManager: P2pTransferManager
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        p2pTransferManager = P2pTransferManager(
+            context = this,
+            onStatus = { message, error -> publishStatus(message, error) },
+            onMeteredApproval = { sessionId ->
+                publishStatus(
+                    "P2P 直传等待确认是否使用计费网络",
+                    notification = buildP2pMeteredNotification(sessionId),
+                )
+            },
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,6 +66,7 @@ class RemoteDownloadService : Service() {
 
         AppPreferences.saveRemoteEnabled(this, true)
         startInForeground(buildIdleNotification("正在连接远程任务服务…"))
+        p2pTransferManager.start()
         if (!loopStarted) {
             loopStarted = true
             executor.execute(::runLoop)
@@ -73,6 +85,13 @@ class RemoteDownloadService : Service() {
                 }
                 signalLoop()
             }
+
+            ACTION_ALLOW_P2P_METERED -> {
+                intent.getStringExtra(EXTRA_P2P_SESSION_ID)?.let { sessionId ->
+                    AppPreferences.approveP2pSession(this, sessionId)
+                }
+                p2pTransferManager.wake()
+            }
         }
         return START_STICKY
     }
@@ -81,6 +100,7 @@ class RemoteDownloadService : Service() {
         stopRequested.set(true)
         cancelCurrent.set(true)
         signalLoop()
+        p2pTransferManager.stop()
         releaseWakeLock()
         running = false
         currentJobId = null
@@ -93,7 +113,7 @@ class RemoteDownloadService : Service() {
 
     private fun runLoop() {
         running = true
-        publishStatus("远程下载已启用，等待任务")
+        publishStatus("远程服务已启用，等待链接任务或 P2P 直传")
         while (!stopRequested.get() && AppPreferences.remoteEnabled(this)) {
             try {
                 val credentials = AppPreferences.remoteDevice(this)
@@ -114,7 +134,7 @@ class RemoteDownloadService : Service() {
                 if (job == null) {
                     currentJobId = null
                     cancelCurrent.set(false)
-                    publishStatus("远程下载已启用，等待任务")
+                    publishStatus("远程服务已启用，等待链接任务或 P2P 直传")
                     waitForNextPoll(POLL_INTERVAL_MS)
                     continue
                 }
@@ -464,7 +484,7 @@ class RemoteDownloadService : Service() {
     }
 
     private fun buildIdleNotification(message: String): Notification =
-        baseNotification("远程离线下载", message)
+        baseNotification("远程文件服务", message)
             .addAction(0, "停止", serviceAction(ACTION_STOP, 20))
             .build()
 
@@ -482,6 +502,23 @@ class RemoteDownloadService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .addAction(0, "立即下载", approve)
             .addAction(0, "取消任务", serviceAction(ACTION_CANCEL_CURRENT, 22))
+            .build()
+    }
+
+    private fun buildP2pMeteredNotification(sessionId: String): Notification {
+        val approveIntent = Intent(this, RemoteDownloadService::class.java)
+            .setAction(ACTION_ALLOW_P2P_METERED)
+            .putExtra(EXTRA_P2P_SESSION_ID, sessionId)
+        val approve = PendingIntent.getService(
+            this,
+            23,
+            approveIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return baseNotification("是否使用计费网络？", "有 P2P 文件直传正在等待确认")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(0, "允许直传", approve)
+            .addAction(0, "停止服务", serviceAction(ACTION_STOP, 20))
             .build()
     }
 
@@ -522,10 +559,10 @@ class RemoteDownloadService : Service() {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "远程离线下载",
+            "远程文件服务",
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = "显示远程任务、计费网络确认和下载进度"
+            description = "显示远程任务、P2P 直传、计费网络确认和传输进度"
             setShowBadge(false)
         }
         notificationManager().createNotificationChannel(channel)
@@ -615,11 +652,14 @@ class RemoteDownloadService : Service() {
         const val ACTION_STOP = "com.lanfileserver.app.action.REMOTE_STOP"
         const val ACTION_CANCEL_CURRENT = "com.lanfileserver.app.action.REMOTE_CANCEL_CURRENT"
         const val ACTION_ALLOW_METERED = "com.lanfileserver.app.action.REMOTE_ALLOW_METERED"
+        const val ACTION_ALLOW_P2P_METERED =
+            "com.lanfileserver.app.action.REMOTE_ALLOW_P2P_METERED"
         const val ACTION_STATE_CHANGED = "com.lanfileserver.app.action.REMOTE_STATE_CHANGED"
         const val EXTRA_RUNNING = "remote_running"
         const val EXTRA_STATUS = "remote_status"
         const val EXTRA_ERROR = "remote_error"
         const val EXTRA_JOB_ID = "remote_job_id"
+        const val EXTRA_P2P_SESSION_ID = "p2p_session_id"
 
         private const val CHANNEL_ID = "remote_download"
         private const val NOTIFICATION_ID = 2001
@@ -638,7 +678,7 @@ class RemoteDownloadService : Service() {
             private set
 
         @Volatile
-        var lastStatus: String = "远程下载未启用"
+        var lastStatus: String = "远程文件服务未启用"
             private set
 
         @Volatile

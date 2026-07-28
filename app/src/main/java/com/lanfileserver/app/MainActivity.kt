@@ -302,7 +302,7 @@ private fun ServerControlScreen() {
                 .setAction(RemoteDownloadService.ACTION_STOP),
         )
         remoteRunning = false
-        remoteStatus = "远程下载未启用"
+        remoteStatus = "远程文件服务未启用"
         remoteError = false
     }
 
@@ -321,9 +321,9 @@ private fun ServerControlScreen() {
                                     "局域网文件共享"
                                 }
                                 AppTab.REMOTE -> if (remoteRunning) {
-                                    remoteDevice?.name ?: "远程下载运行中"
+                                    remoteDevice?.name ?: "远程文件服务运行中"
                                 } else {
-                                    "远程下载与应用更新"
+                                    "远程文件服务与应用更新"
                                 }
                             },
                             style = MaterialTheme.typography.labelMedium,
@@ -720,6 +720,7 @@ private fun RemoteDownloadPane(
 ) {
     val context = LocalContext.current
     val dashboardUrl = "${RemoteDownloadApi.BASE_URL}/admin/offline-download"
+    val p2pUrl = "${RemoteDownloadApi.BASE_URL}/admin/p2p-transfer"
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -729,9 +730,9 @@ private fun RemoteDownloadPane(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                SectionTitle("远程离线下载")
+                SectionTitle("远程文件服务")
                 Text(
-                    "手机直接从链接下载到当前共享文件夹",
+                    "支持链接离线下载与纯 P2P 文件直传",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -797,25 +798,37 @@ private fun RemoteDownloadPane(
                 onClick = { openUrl(context, dashboardUrl) },
                 modifier = Modifier.weight(1f),
             ) {
-                Text("打开控制页")
+                Text("离线下载页")
             }
+            OutlinedButton(
+                onClick = { openUrl(context, p2pUrl) },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("P2P 直传页")
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             if (running) {
                 Button(
                     onClick = onStop,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                     ),
                 ) {
-                    Text("停止远程下载")
+                    Text("停止远程服务")
                 }
             } else {
                 Button(
                     onClick = onStart,
                     enabled = device != null,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("启用远程下载")
+                    Text("启用远程服务")
                 }
             }
         }
@@ -825,12 +838,12 @@ private fun RemoteDownloadPane(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                dashboardUrl,
+                p2pUrl,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            TextButton(onClick = { copyText(context, dashboardUrl) }) {
+            TextButton(onClick = { copyText(context, p2pUrl) }) {
                 Text("复制")
             }
         }

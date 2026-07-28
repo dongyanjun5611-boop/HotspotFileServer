@@ -21,6 +21,7 @@ data class DeviceLanStatus(
     val lanServerRunning: Boolean,
     val batteryPercent: Int?,
     val batteryCharging: Boolean,
+    val p2pSupported: Boolean,
 )
 
 object DeviceLanStatusReader {
@@ -39,6 +40,7 @@ object DeviceLanStatusReader {
             lanServerRunning = serverRunning,
             batteryPercent = batteryStatus.first,
             batteryCharging = batteryStatus.second,
+            p2pSupported = true,
         )
     }
 

@@ -27,6 +27,16 @@ data class RemoteProgress(
     val statusMessage: String = "",
 )
 
+data class P2pRemoteSession(
+    val id: String,
+)
+
+data class P2pRemoteSignal(
+    val sequence: Long,
+    val type: String,
+    val payload: String,
+)
+
 class RemoteDownloadApi {
     fun pair(code: String): RemoteDeviceCredentials {
         val response = request(
@@ -60,7 +70,8 @@ class RemoteDownloadApi {
                 .put("lanAccessCode", status.lanAccessCode)
                 .put("lanServerRunning", status.lanServerRunning)
                 .put("batteryPercent", status.batteryPercent ?: JSONObject.NULL)
-                .put("batteryCharging", status.batteryCharging),
+                .put("batteryCharging", status.batteryCharging)
+                .put("p2pSupported", status.p2pSupported),
             token = credentials.token,
         )
         val jobs = response.optJSONArray("jobs") ?: JSONArray()
@@ -77,6 +88,76 @@ class RemoteDownloadApi {
                 )
             }
         }
+    }
+
+    fun listP2pSessions(
+        credentials: RemoteDeviceCredentials,
+    ): List<P2pRemoteSession> {
+        val response = request(
+            method = "GET",
+            path = "/api/p2p-transfer/device/sessions",
+            token = credentials.token,
+        )
+        val sessions = response.optJSONArray("sessions") ?: JSONArray()
+        return buildList {
+            for (index in 0 until sessions.length()) {
+                val item = sessions.getJSONObject(index)
+                add(P2pRemoteSession(id = item.getString("id")))
+            }
+        }
+    }
+
+    fun pollP2pSignals(
+        credentials: RemoteDeviceCredentials,
+        sessionId: String,
+        after: Long,
+    ): List<P2pRemoteSignal> {
+        val response = request(
+            method = "GET",
+            path = "/api/p2p-transfer/device/sessions/${encodePath(sessionId)}/signals" +
+                "?after=${after.coerceAtLeast(0L)}",
+            token = credentials.token,
+        )
+        val signals = response.optJSONArray("signals") ?: JSONArray()
+        return buildList {
+            for (index in 0 until signals.length()) {
+                val item = signals.getJSONObject(index)
+                add(
+                    P2pRemoteSignal(
+                        sequence = item.getLong("sequence"),
+                        type = item.getString("type"),
+                        payload = item.optString("payload"),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun sendP2pSignal(
+        credentials: RemoteDeviceCredentials,
+        sessionId: String,
+        type: String,
+        payload: String = "",
+    ) {
+        request(
+            method = "POST",
+            path = "/api/p2p-transfer/device/sessions/${encodePath(sessionId)}/signals",
+            body = JSONObject()
+                .put("type", type)
+                .put("payload", payload),
+            token = credentials.token,
+        )
+    }
+
+    fun closeP2pSession(
+        credentials: RemoteDeviceCredentials,
+        sessionId: String,
+    ) {
+        request(
+            method = "DELETE",
+            path = "/api/p2p-transfer/device/sessions/${encodePath(sessionId)}",
+            token = credentials.token,
+        )
     }
 
     fun report(

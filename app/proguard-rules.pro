@@ -1,3 +1,4 @@
 -keep class fi.iki.elonen.** { *; }
 -dontwarn fi.iki.elonen.**
-
+-keep class org.webrtc.** { *; }
+-dontwarn org.webrtc.**

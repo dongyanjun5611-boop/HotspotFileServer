@@ -46,6 +46,48 @@ class StorageTree(
         val size: Long,
     )
 
+    class WritableFile internal constructor(
+        private val context: Context,
+        private val document: DocumentFile,
+        private val output: OutputStream,
+        val name: String,
+        val path: String,
+    ) {
+        private var closed = false
+
+        @Synchronized
+        fun write(bytes: ByteArray) {
+            check(!closed) { "文件写入已结束" }
+            output.write(bytes)
+        }
+
+        @Synchronized
+        fun finish(size: Long): UploadResult {
+            check(!closed) { "文件写入已结束" }
+            return try {
+                output.flush()
+                output.close()
+                closed = true
+                FileChangeNotifier.notify(context)
+                UploadResult(name = name, path = path, size = size)
+            } catch (error: Throwable) {
+                closed = true
+                runCatching { output.close() }
+                runCatching { document.delete() }
+                throw error
+            }
+        }
+
+        @Synchronized
+        fun abort() {
+            if (!closed) {
+                closed = true
+                runCatching { output.close() }
+            }
+            runCatching { document.delete() }
+        }
+    }
+
     fun list(path: String): List<Entry> {
         val normalized = SafePath.normalize(path)
         val directory = resolve(normalized)
@@ -183,6 +225,37 @@ class StorageTree(
         )
         FileChangeNotifier.notify(context)
         return result
+    }
+
+    fun openWritableFile(
+        parentPath: String,
+        requestedName: String,
+        mimeType: String,
+    ): WritableFile {
+        val safeName = SafePath.sanitizeName(requestedName)
+        val safeMimeType = mimeType.ifBlank { mimeTypeFor(safeName) }
+        val normalizedParent = SafePath.normalize(parentPath)
+        val (document, actualName) = synchronized(mutationLock) {
+            val parent = requireDirectory(normalizedParent)
+            val availableName = uniqueName(parent, safeName)
+            val created = parent.createFile(safeMimeType, availableName)
+                ?: throw IOException("无法创建直传文件")
+            created to (created.name ?: availableName)
+        }
+        val output = try {
+            context.contentResolver.openOutputStream(document.uri, "w")
+                ?: throw IOException("无法写入直传文件")
+        } catch (error: Throwable) {
+            runCatching { document.delete() }
+            throw error
+        }
+        return WritableFile(
+            context = context,
+            document = document,
+            output = output,
+            name = actualName,
+            path = SafePath.join(normalizedParent, actualName),
+        )
     }
 
     fun rename(path: String, requestedName: String): Entry {

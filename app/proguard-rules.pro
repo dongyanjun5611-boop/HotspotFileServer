@@ -2,3 +2,4 @@
 -dontwarn fi.iki.elonen.**
 -keep class org.webrtc.** { *; }
 -dontwarn org.webrtc.**
+-keep class org.jni_zero.JniInit { *; }

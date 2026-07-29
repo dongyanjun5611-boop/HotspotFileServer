@@ -23,6 +23,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 
 internal class P2pTransferManager(
@@ -277,6 +278,7 @@ private class DevicePeerSession(
     private val connected = AtomicBoolean(false)
     private val downloadCanceled = AtomicBoolean(false)
     private val transferLock = Any()
+    private val callbackFailure = AtomicReference<String?>(null)
     private var peerConnection: PeerConnection? = null
     private var dataChannel: DataChannel? = null
     private var lastSignalSequence = 0L
@@ -368,6 +370,10 @@ private class DevicePeerSession(
     }
 
     fun tick() {
+        callbackFailure.getAndSet(null)?.let { message ->
+            close(message, failed = true)
+            return
+        }
         if (closed.get() || connected.get()) return
         flushOutboundSignals()
         val signals = api.pollP2pSignals(
@@ -504,6 +510,17 @@ private class DevicePeerSession(
         )
     }
 
+    private fun recordDataChannelCallbackFailure(error: Throwable) {
+        val detail = error.message
+            ?.take(160)
+            ?.takeIf { it.isNotBlank() }
+            ?: error.javaClass.simpleName
+        callbackFailure.compareAndSet(
+            null,
+            "P2P 数据通道回调失败：$detail",
+        )
+    }
+
     private fun registerDataChannel(channel: DataChannel) {
         runCatching { dataChannel?.unregisterObserver() }
         runCatching { dataChannel?.dispose() }
@@ -513,43 +530,52 @@ private class DevicePeerSession(
                 override fun onBufferedAmountChange(previousAmount: Long) = Unit
 
                 override fun onStateChange() {
-                    when (channel.state()) {
-                        DataChannel.State.OPEN -> {
-                            connected.set(true)
-                            onStatus("P2P 已直连，文件不经过服务器", false)
-                        }
+                    try {
+                        when (channel.state()) {
+                            DataChannel.State.OPEN -> {
+                                connected.set(true)
+                                onStatus("P2P 已直连，文件不经过服务器", false)
+                            }
 
-                        DataChannel.State.CLOSED -> {
-                            close("P2P 数据通道已关闭", failed = false)
-                        }
+                            DataChannel.State.CLOSED -> {
+                                close("P2P 数据通道已关闭", failed = false)
+                            }
 
-                        else -> Unit
+                            else -> Unit
+                        }
+                    } catch (error: Throwable) {
+                        recordDataChannelCallbackFailure(error)
                     }
                 }
 
                 override fun onMessage(buffer: DataChannel.Buffer?) {
-                    if (buffer == null || closed.get()) return
-                    val source = buffer.data
-                    val bytes = ByteArray(source.remaining())
-                    source.get(bytes)
-                    if (buffer.binary) {
-                        transferExecutor.execute { handleUploadBytes(bytes) }
-                    } else {
-                        val text = String(bytes, StandardCharsets.UTF_8)
-                        val command = runCatching { JSONObject(text) }.getOrNull() ?: return
-                        when (command.optString("type")) {
-                            "cancel" -> {
-                                downloadCanceled.set(true)
-                                transferExecutor.execute { cancelTransfer(command) }
-                            }
+                    try {
+                        if (buffer == null || closed.get()) return
+                        val source = buffer.data
+                        val bytes = ByteArray(source.remaining())
+                        source.get(bytes)
+                        if (buffer.binary) {
+                            transferExecutor.execute { handleUploadBytes(bytes) }
+                        } else {
+                            val text = String(bytes, StandardCharsets.UTF_8)
+                            val command =
+                                runCatching { JSONObject(text) }.getOrNull() ?: return
+                            when (command.optString("type")) {
+                                "cancel" -> {
+                                    downloadCanceled.set(true)
+                                    transferExecutor.execute { cancelTransfer(command) }
+                                }
 
-                            "disconnect" -> {
-                                sendText(JSONObject().put("type", "disconnected"))
-                                close("网页已断开 P2P 连接", failed = false)
-                            }
+                                "disconnect" -> {
+                                    sendText(JSONObject().put("type", "disconnected"))
+                                    close("网页已断开 P2P 连接", failed = false)
+                                }
 
-                            else -> transferExecutor.execute { handleCommand(command) }
+                                else -> transferExecutor.execute { handleCommand(command) }
+                            }
                         }
+                    } catch (error: Throwable) {
+                        recordDataChannelCallbackFailure(error)
                     }
                 }
             },

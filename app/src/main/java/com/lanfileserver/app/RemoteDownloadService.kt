@@ -37,21 +37,26 @@ class RemoteDownloadService : Service() {
     private var currentJobId: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val api = RemoteDownloadApi()
-    private lateinit var p2pTransferManager: P2pTransferManager
+    private var p2pTransferManager: P2pTransferManager? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        p2pTransferManager = P2pTransferManager(
-            context = this,
-            onStatus = { message, error -> publishStatus(message, error) },
-            onMeteredApproval = { sessionId ->
-                publishStatus(
-                    "P2P 直传等待确认是否使用计费网络",
-                    notification = buildP2pMeteredNotification(sessionId),
-                )
-            },
-        )
+        p2pTransferManager = runCatching {
+            P2pTransferManager(
+                context = this,
+                onStatus = { message, error -> publishStatus(message, error) },
+                onMeteredApproval = { sessionId ->
+                    publishStatus(
+                        "P2P 直传等待确认是否使用计费网络",
+                        notification = buildP2pMeteredNotification(sessionId),
+                    )
+                },
+            )
+        }.getOrElse {
+            publishStatus("P2P 模块不可用，其他远程功能仍可使用", error = true)
+            null
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -66,7 +71,7 @@ class RemoteDownloadService : Service() {
 
         AppPreferences.saveRemoteEnabled(this, true)
         startInForeground(buildIdleNotification("正在连接远程任务服务…"))
-        p2pTransferManager.start()
+        p2pTransferManager?.start()
         if (!loopStarted) {
             loopStarted = true
             executor.execute(::runLoop)
@@ -90,7 +95,7 @@ class RemoteDownloadService : Service() {
                 intent.getStringExtra(EXTRA_P2P_SESSION_ID)?.let { sessionId ->
                     AppPreferences.approveP2pSession(this, sessionId)
                 }
-                p2pTransferManager.wake()
+                p2pTransferManager?.wake()
             }
         }
         return START_STICKY
@@ -100,7 +105,7 @@ class RemoteDownloadService : Service() {
         stopRequested.set(true)
         cancelCurrent.set(true)
         signalLoop()
-        p2pTransferManager.stop()
+        p2pTransferManager?.stop()
         releaseWakeLock()
         running = false
         currentJobId = null

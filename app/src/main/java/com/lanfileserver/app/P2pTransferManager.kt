@@ -57,7 +57,6 @@ internal class P2pTransferManager(
         if (started) return
         started = true
         stopRequested.set(false)
-        initializeWebRtc()
         executor.execute(::runLoop)
     }
 
@@ -77,15 +76,25 @@ internal class P2pTransferManager(
         peerFactory = null
     }
 
-    private fun initializeWebRtc() {
+    private fun requirePeerFactory(): PeerConnectionFactory {
+        peerFactory?.let { return it }
         if (webRtcInitialized.compareAndSet(false, true)) {
-            PeerConnectionFactory.initialize(
-                PeerConnectionFactory.InitializationOptions
-                    .builder(appContext)
-                    .createInitializationOptions(),
-            )
+            try {
+                PeerConnectionFactory.initialize(
+                    PeerConnectionFactory.InitializationOptions
+                        .builder(appContext)
+                        .createInitializationOptions(),
+                )
+            } catch (error: Throwable) {
+                webRtcInitialized.set(false)
+                throw error
+            }
         }
-        peerFactory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+        val created = PeerConnectionFactory.builder()
+            .createPeerConnectionFactory()
+            ?: throw IOException("无法创建 WebRTC 引擎")
+        peerFactory = created
+        return created
     }
 
     private fun runLoop() {
@@ -139,12 +148,29 @@ internal class P2pTransferManager(
                 }
 
                 approvalNotifiedFor = null
+                val factory = try {
+                    requirePeerFactory()
+                } catch (error: Throwable) {
+                    val message = webRtcFailureMessage(error)
+                    runCatching {
+                        api.sendP2pSignal(
+                            credentials,
+                            pending.id,
+                            "error",
+                            JSONObject().put("message", message).toString(),
+                        )
+                    }
+                    runCatching { api.closeP2pSession(credentials, pending.id) }
+                    onStatus(message, true)
+                    waitForNextPoll(ERROR_POLL_MS)
+                    continue
+                }
                 activeSession = DevicePeerSession(
                     context = appContext,
                     sessionId = pending.id,
                     credentials = credentials,
                     treeUri = treeUri,
-                    factory = requireNotNull(peerFactory),
+                    factory = factory,
                     api = api,
                     transferExecutor = transferExecutor,
                     downloadExecutor = downloadExecutor,
@@ -213,6 +239,14 @@ internal class P2pTransferManager(
         synchronized(wakeSignal) {
             if (!stopRequested.get()) wakeSignal.wait(milliseconds)
         }
+    }
+
+    private fun webRtcFailureMessage(error: Throwable): String {
+        val reason = when (error) {
+            is UnsatisfiedLinkError -> "WebRTC 原生库无法加载"
+            else -> "WebRTC 初始化失败（${error.javaClass.simpleName}）"
+        }
+        return "这台设备暂时无法使用 P2P：$reason"
     }
 
     companion object {

@@ -278,8 +278,11 @@ private class DevicePeerSession(
     private val connected = AtomicBoolean(false)
     private val downloadCanceled = AtomicBoolean(false)
     private val transferLock = Any()
-    private val callbackFailure = AtomicReference<String?>(null)
+    private val pendingClose = AtomicReference<CloseRequest?>(null)
+    private val bufferedAmountSignal = Object()
+    @Volatile
     private var peerConnection: PeerConnection? = null
+    @Volatile
     private var dataChannel: DataChannel? = null
     private var lastSignalSequence = 0L
     private var remoteDescriptionSet = false
@@ -316,21 +319,25 @@ private class DevicePeerSession(
                 override fun onConnectionChange(
                     newState: PeerConnection.PeerConnectionState?,
                 ) {
-                    when (newState) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> {
-                            connected.set(true)
-                            onStatus("P2P 已直连，文件不经过服务器", false)
-                        }
+                    try {
+                        when (newState) {
+                            PeerConnection.PeerConnectionState.CONNECTED -> {
+                                connected.set(true)
+                                onStatus("P2P 已直连，文件不经过服务器", false)
+                            }
 
-                        PeerConnection.PeerConnectionState.FAILED -> {
-                            close("当前网络无法建立 P2P 直连", failed = true)
-                        }
+                            PeerConnection.PeerConnectionState.FAILED -> {
+                                requestClose("当前网络无法建立 P2P 直连", failed = true)
+                            }
 
-                        PeerConnection.PeerConnectionState.CLOSED -> {
-                            close("P2P 连接已结束", failed = false)
-                        }
+                            PeerConnection.PeerConnectionState.CLOSED -> {
+                                requestClose("P2P 连接已结束", failed = false)
+                            }
 
-                        else -> Unit
+                            else -> Unit
+                        }
+                    } catch (error: Throwable) {
+                        recordNativeCallbackFailure(error)
                     }
                 }
 
@@ -341,23 +348,32 @@ private class DevicePeerSession(
 
                 override fun onIceCandidate(candidate: IceCandidate?) {
                     if (candidate == null) return
-                    outboundSignals.add(
-                        OutboundSignal(
-                            type = "candidate",
-                            payload = JSONObject()
-                                .put("candidate", candidate.sdp)
-                                .put("sdpMid", candidate.sdpMid)
-                                .put("sdpMLineIndex", candidate.sdpMLineIndex)
-                                .toString(),
-                        ),
-                    )
+                    try {
+                        outboundSignals.add(
+                            OutboundSignal(
+                                type = "candidate",
+                                payload = JSONObject()
+                                    .put("candidate", candidate.sdp)
+                                    .put("sdpMid", candidate.sdpMid)
+                                    .put("sdpMLineIndex", candidate.sdpMLineIndex)
+                                    .toString(),
+                            ),
+                        )
+                    } catch (error: Throwable) {
+                        recordNativeCallbackFailure(error)
+                    }
                 }
 
                 override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
                 override fun onAddStream(stream: MediaStream?) = Unit
                 override fun onRemoveStream(stream: MediaStream?) = Unit
                 override fun onDataChannel(channel: DataChannel?) {
-                    if (channel != null) registerDataChannel(channel)
+                    if (channel == null) return
+                    try {
+                        registerDataChannel(channel)
+                    } catch (error: Throwable) {
+                        recordNativeCallbackFailure(error)
+                    }
                 }
 
                 override fun onRenegotiationNeeded() = Unit
@@ -370,8 +386,8 @@ private class DevicePeerSession(
     }
 
     fun tick() {
-        callbackFailure.getAndSet(null)?.let { message ->
-            close(message, failed = true)
+        pendingClose.getAndSet(null)?.let { requested ->
+            close(requested.message, requested.failed)
             return
         }
         if (closed.get() || connected.get()) return
@@ -406,6 +422,7 @@ private class DevicePeerSession(
         failure = failed
         connected.set(false)
         downloadCanceled.set(true)
+        synchronized(bufferedAmountSignal) { bufferedAmountSignal.notifyAll() }
         synchronized(transferLock) {
             upload?.file?.abort()
             upload = null
@@ -426,17 +443,20 @@ private class DevicePeerSession(
         val peer = peerConnection ?: return
         peer.setRemoteDescription(
             CallbackSdpObserver(
+                onCallbackFailure = ::recordNativeCallbackFailure,
                 onSetSuccess = {
-                    remoteDescriptionSet = true
-                    synchronized(candidateLock) {
-                        pendingCandidates.forEach(peer::addIceCandidate)
+                    val candidates = synchronized(candidateLock) {
+                        remoteDescriptionSet = true
+                        val ready = pendingCandidates.toList()
                         pendingCandidates.clear()
+                        ready
                     }
+                    candidates.forEach(peer::addIceCandidate)
                     createAnswer()
                 },
                 onFailure = {
                     queueError("无法接受网页端连接信息：$it")
-                    close("P2P 握手失败", failed = true)
+                    requestClose("P2P 握手失败", failed = true)
                 },
             ),
             SessionDescription(SessionDescription.Type.OFFER, sdp),
@@ -447,9 +467,11 @@ private class DevicePeerSession(
         val peer = peerConnection ?: return
         peer.createAnswer(
             CallbackSdpObserver(
+                onCallbackFailure = ::recordNativeCallbackFailure,
                 onCreateSuccess = { answer ->
                     peer.setLocalDescription(
                         CallbackSdpObserver(
+                            onCallbackFailure = ::recordNativeCallbackFailure,
                             onSetSuccess = {
                                 outboundSignals.add(
                                     OutboundSignal(
@@ -482,11 +504,13 @@ private class DevicePeerSession(
             item.getString("candidate"),
         )
         val peer = peerConnection ?: return
-        if (remoteDescriptionSet) {
-            peer.addIceCandidate(candidate)
-        } else {
-            synchronized(candidateLock) { pendingCandidates.add(candidate) }
+        val addNow = synchronized(candidateLock) {
+            if (remoteDescriptionSet) true else {
+                pendingCandidates.add(candidate)
+                false
+            }
         }
+        if (addNow) peer.addIceCandidate(candidate)
     }
 
     private fun flushOutboundSignals() {
@@ -510,15 +534,16 @@ private class DevicePeerSession(
         )
     }
 
-    private fun recordDataChannelCallbackFailure(error: Throwable) {
+    private fun requestClose(message: String, failed: Boolean) {
+        pendingClose.compareAndSet(null, CloseRequest(message, failed))
+    }
+
+    private fun recordNativeCallbackFailure(error: Throwable) {
         val detail = error.message
             ?.take(160)
             ?.takeIf { it.isNotBlank() }
             ?: error.javaClass.simpleName
-        callbackFailure.compareAndSet(
-            null,
-            "P2P 数据通道回调失败：$detail",
-        )
+        requestClose("P2P 回调失败：$detail", failed = true)
     }
 
     private fun registerDataChannel(channel: DataChannel) {
@@ -527,7 +552,9 @@ private class DevicePeerSession(
         dataChannel = channel
         channel.registerObserver(
             object : DataChannel.Observer {
-                override fun onBufferedAmountChange(previousAmount: Long) = Unit
+                override fun onBufferedAmountChange(previousAmount: Long) {
+                    synchronized(bufferedAmountSignal) { bufferedAmountSignal.notifyAll() }
+                }
 
                 override fun onStateChange() {
                     try {
@@ -538,13 +565,13 @@ private class DevicePeerSession(
                             }
 
                             DataChannel.State.CLOSED -> {
-                                close("P2P 数据通道已关闭", failed = false)
+                                requestClose("P2P 数据通道已关闭", failed = false)
                             }
 
                             else -> Unit
                         }
                     } catch (error: Throwable) {
-                        recordDataChannelCallbackFailure(error)
+                        recordNativeCallbackFailure(error)
                     }
                 }
 
@@ -563,19 +590,26 @@ private class DevicePeerSession(
                             when (command.optString("type")) {
                                 "cancel" -> {
                                     downloadCanceled.set(true)
+                                    synchronized(bufferedAmountSignal) {
+                                        bufferedAmountSignal.notifyAll()
+                                    }
                                     transferExecutor.execute { cancelTransfer(command) }
                                 }
 
                                 "disconnect" -> {
-                                    sendText(JSONObject().put("type", "disconnected"))
-                                    close("网页已断开 P2P 连接", failed = false)
+                                    transferExecutor.execute {
+                                        runCatching {
+                                            sendText(JSONObject().put("type", "disconnected"))
+                                        }
+                                        requestClose("网页已断开 P2P 连接", failed = false)
+                                    }
                                 }
 
                                 else -> transferExecutor.execute { handleCommand(command) }
                             }
                         }
                     } catch (error: Throwable) {
-                        recordDataChannelCallbackFailure(error)
+                        recordNativeCallbackFailure(error)
                     }
                 }
             },
@@ -792,10 +826,14 @@ private class DevicePeerSession(
 
     private fun sendBinary(bytes: ByteArray) {
         val channel = dataChannel ?: throw IOException("P2P 数据通道已关闭")
-        while (channel.bufferedAmount() > MAX_BUFFERED_BYTES) {
-            if (downloadCanceled.get() || closed.get()) throw TransferCanceledException()
-            Thread.sleep(15L)
+        synchronized(bufferedAmountSignal) {
+            while (true) {
+                if (downloadCanceled.get() || closed.get()) throw TransferCanceledException()
+                if (channel.bufferedAmount() <= MAX_BUFFERED_BYTES - bytes.size) break
+                bufferedAmountSignal.wait(250L)
+            }
         }
+        if (downloadCanceled.get() || closed.get()) throw TransferCanceledException()
         if (!channel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), true))) {
             throw IOException("P2P 数据发送失败")
         }
@@ -845,6 +883,11 @@ private data class OutboundSignal(
     val payload: String,
 )
 
+private data class CloseRequest(
+    val message: String,
+    val failed: Boolean,
+)
+
 private data class UploadState(
     val id: String,
     val expectedSize: Long,
@@ -857,11 +900,12 @@ private data class UploadState(
 private class TransferCanceledException : IOException("传输已取消")
 
 private class CallbackSdpObserver(
+    private val onCallbackFailure: (Throwable) -> Unit,
     private val onCreateSuccess: (SessionDescription) -> Unit = {},
     private val onSetSuccess: () -> Unit = {},
     private val onFailure: (String) -> Unit = {},
 ) : SdpObserver {
-    override fun onCreateSuccess(description: SessionDescription?) {
+    override fun onCreateSuccess(description: SessionDescription?) = guard {
         if (description == null) {
             onFailure("连接信息为空")
         } else {
@@ -869,11 +913,19 @@ private class CallbackSdpObserver(
         }
     }
 
-    override fun onSetSuccess() = onSetSuccess.invoke()
+    override fun onSetSuccess() = guard { onSetSuccess.invoke() }
 
     override fun onCreateFailure(message: String?) =
-        onFailure(message ?: "创建连接信息失败")
+        guard { onFailure(message ?: "创建连接信息失败") }
 
     override fun onSetFailure(message: String?) =
-        onFailure(message ?: "设置连接信息失败")
+        guard { onFailure(message ?: "设置连接信息失败") }
+
+    private fun guard(action: () -> Unit) {
+        try {
+            action()
+        } catch (error: Throwable) {
+            onCallbackFailure(error)
+        }
+    }
 }

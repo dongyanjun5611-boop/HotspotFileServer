@@ -3,6 +3,7 @@ package com.lanfileserver.app
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import java.io.BufferedOutputStream
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
@@ -244,6 +245,7 @@ class StorageTree(
         }
         val output = try {
             context.contentResolver.openOutputStream(document.uri, "w")
+                ?.let { BufferedOutputStream(it, P2P_WRITE_BUFFER_SIZE) }
                 ?: throw IOException("无法写入直传文件")
         } catch (error: Throwable) {
             runCatching { document.delete() }
@@ -318,21 +320,12 @@ class StorageTree(
     }
 
     private fun uniqueName(parent: DocumentFile, requestedName: String): String {
-        if (parent.findFile(requestedName) == null) return requestedName
-
-        val dot = requestedName.lastIndexOf('.')
-        val hasExtension = dot > 0 && dot < requestedName.lastIndex
-        val base = if (hasExtension) requestedName.substring(0, dot) else requestedName
-        val extension = if (hasExtension) requestedName.substring(dot) else ""
-        for (index in 1..9_999) {
-            val candidate = "$base ($index)$extension"
-            if (parent.findFile(candidate) == null) return candidate
-        }
-        throw IOException("同名文件过多")
+        val existingNames = parent.listFiles().mapNotNull { it.name }.toHashSet()
+        return UniqueFileName.choose(requestedName, existingNames)
     }
 
     private fun copyExactly(input: InputStream, output: java.io.OutputStream, length: Long) {
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 4)
+        val buffer = ByteArray(64 * 1024)
         var remaining = length
         while (remaining > 0L) {
             val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
@@ -345,6 +338,10 @@ class StorageTree(
     private fun mimeTypeFor(name: String): String =
         URLConnection.guessContentTypeFromName(name.lowercase(Locale.ROOT))
             ?: "application/octet-stream"
+
+    private companion object {
+        const val P2P_WRITE_BUFFER_SIZE = 64 * 1024
+    }
 }
 
 class AlreadyExistsException(message: String) : IOException(message)

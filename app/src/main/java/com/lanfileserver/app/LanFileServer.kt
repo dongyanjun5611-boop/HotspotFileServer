@@ -419,32 +419,37 @@ class LanFileServer(
 
     private fun download(session: IHTTPSession): Response {
         val opened = storage.open(parameter(session, "path"))
-        val range = parseRange(session.headers["range"], opened.length)
-        val response = if (range != null) {
-            skipFully(opened.input, range.first)
-            val count = range.last - range.first + 1L
-            newFixedLengthResponse(
-                Response.Status.PARTIAL_CONTENT,
-                opened.mimeType,
-                LimitedInputStream(opened.input, count),
-                count,
-            ).apply {
-                addHeader("Content-Range", "bytes ${range.first}-${range.last}/${opened.length}")
+        try {
+            val range = parseRange(session.headers["range"], opened.length)
+            val response = if (range != null) {
+                skipFully(opened.input, range.first)
+                val count = range.last - range.first + 1L
+                newFixedLengthResponse(
+                    Response.Status.PARTIAL_CONTENT,
+                    opened.mimeType,
+                    LimitedInputStream(opened.input, count),
+                    count,
+                ).apply {
+                    addHeader("Content-Range", "bytes ${range.first}-${range.last}/${opened.length}")
+                }
+            } else if (opened.length > 0L) {
+                newFixedLengthResponse(
+                    Response.Status.OK,
+                    opened.mimeType,
+                    opened.input,
+                    opened.length,
+                )
+            } else {
+                newChunkedResponse(Response.Status.OK, opened.mimeType, opened.input)
             }
-        } else if (opened.length > 0L) {
-            newFixedLengthResponse(
-                Response.Status.OK,
-                opened.mimeType,
-                opened.input,
-                opened.length,
-            )
-        } else {
-            newChunkedResponse(Response.Status.OK, opened.mimeType, opened.input)
-        }
 
-        return secure(response).apply {
-            addHeader("Accept-Ranges", "bytes")
-            addHeader("Content-Disposition", contentDisposition(opened.name))
+            return secure(response).apply {
+                addHeader("Accept-Ranges", "bytes")
+                addHeader("Content-Disposition", contentDisposition(opened.name))
+            }
+        } catch (error: Throwable) {
+            runCatching { opened.input.close() }
+            throw error
         }
     }
 

@@ -150,6 +150,41 @@ class StorageTree(
         }
     }
 
+    fun createTransferDirectory(
+        parentPath: String,
+        requestedName: String,
+        reuseExisting: Boolean,
+    ): Entry {
+        val safeName = SafePath.sanitizeName(requestedName)
+        require(safeName == requestedName) { "文件夹名称不受支持：$requestedName" }
+        val normalizedParent = SafePath.normalize(parentPath)
+        synchronized(mutationLock) {
+            val parent = requireDirectory(normalizedParent)
+            val existing = parent.findFile(safeName)
+            if (reuseExisting && existing != null) {
+                require(existing.isDirectory) { "同名文件已存在：$safeName" }
+                return directoryEntry(normalizedParent, existing, safeName)
+            }
+            val name = if (reuseExisting) safeName else uniqueName(parent, safeName)
+            val created = parent.createDirectory(name)
+                ?: throw IOException("无法创建文件夹：$name")
+            FileChangeNotifier.notify(context)
+            return directoryEntry(normalizedParent, created, name)
+        }
+    }
+
+    private fun directoryEntry(parentPath: String, document: DocumentFile, fallbackName: String): Entry {
+        val name = document.name ?: fallbackName
+        return Entry(
+            name = name,
+            path = SafePath.join(parentPath, name),
+            directory = true,
+            size = 0L,
+            modifiedAt = document.lastModified().coerceAtLeast(0L),
+            mimeType = "inode/directory",
+        )
+    }
+
     fun upload(
         parentPath: String,
         requestedName: String,

@@ -620,6 +620,7 @@ private class DevicePeerSession(
         try {
             when (command.optString("type")) {
                 "list" -> listFiles(command)
+                "mkdir" -> createTransferDirectory(command)
                 "uploadStart" -> beginUpload(command)
                 "uploadFinish" -> finishUpload(command)
                 "downloadStart" -> beginDownload(command)
@@ -652,6 +653,23 @@ private class DevicePeerSession(
                 .put("requestId", command.optString("requestId"))
                 .put("path", path)
                 .put("entries", values),
+        )
+    }
+
+    private fun createTransferDirectory(command: JSONObject) {
+        synchronized(transferLock) {
+            check(upload == null && downloadId == null) { "已有文件正在传输" }
+        }
+        val entry = storage.createTransferDirectory(
+            parentPath = command.getString("path"),
+            requestedName = command.getString("name"),
+            reuseExisting = command.optBoolean("reuseExisting", false),
+        )
+        sendText(
+            JSONObject()
+                .put("type", "mkdirResult")
+                .put("requestId", command.getString("requestId"))
+                .put("path", entry.path),
         )
     }
 
@@ -729,7 +747,13 @@ private class DevicePeerSession(
                 "文件接收不完整：${current.received}/${current.expectedSize}",
             )
         }
-        val result = current.file.finish(current.received)
+        val result = try {
+            current.file.finish(current.received)
+        } catch (error: Throwable) {
+            current.file.abort()
+            synchronized(transferLock) { upload = null }
+            throw error
+        }
         synchronized(transferLock) { upload = null }
         sendText(
             JSONObject()

@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
@@ -109,6 +110,7 @@ fun LocalFileBrowser(
                     }
                 }
             }.onFailure {
+                if (it is CancellationException) throw it
                 error = it.message ?: "添加文件失败"
             }
             refreshKey += 1
@@ -145,6 +147,7 @@ fun LocalFileBrowser(
         }.onSuccess {
             entries = it
         }.onFailure {
+            if (it is CancellationException) throw it
             error = it.message ?: "无法读取文件夹"
         }
         loading = false
@@ -160,6 +163,7 @@ fun LocalFileBrowser(
                     block(StorageTree(context, uri.toUri()))
                 }
             }.onFailure {
+                if (it is CancellationException) throw it
                 error = it.message ?: "文件操作失败"
             }
             selectedEntry = null
